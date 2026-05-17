@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { useCategories } from "../context/CategoriesContext";
 import { supabase } from "../lib/supabase";
 import {
   Budget,
+  CATEGORIES,
+  CATEGORY_COLORS,
+  Category,
   SavingsContribution,
   Transaction,
   UNUSED_COLOR,
@@ -13,7 +15,7 @@ import { formatMonthYear, formatUSD, monthRange } from "../lib/format";
 type NewEntry = {
   kind: "income" | "expense" | "savings";
   amount: string;
-  category: string;
+  category: Category;
   note: string;
   date: string;
 };
@@ -24,13 +26,7 @@ function todayISO(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function zeroMap(names: string[]): Record<string, number> {
-  return Object.fromEntries(names.map((n) => [n, 0]));
-}
-
 export default function Dashboard() {
-  const { names, colors, loading: categoriesLoading } = useCategories();
-
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -45,17 +41,11 @@ export default function Dashboard() {
   const [entry, setEntry] = useState<NewEntry>({
     kind: "expense",
     amount: "",
-    category: "",
+    category: "Food",
     note: "",
     date: todayISO(),
   });
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (names.length > 0 && !names.includes(entry.category)) {
-      setEntry((p) => ({ ...p, category: names[0] }));
-    }
-  }, [names, entry.category]);
 
   async function loadAll() {
     setLoading(true);
@@ -87,19 +77,20 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    if (!categoriesLoading && names.length > 0) loadAll();
+    loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month, categoriesLoading, names.join("|")]);
+  }, [year, month]);
 
   const spentByCategory = useMemo(() => {
-    const out = zeroMap(names);
+    const out: Record<Category, number> = {
+      Housing: 0, Food: 0, Transport: 0, Utilities: 0,
+      Entertainment: 0, Shopping: 0, Other: 0,
+    };
     for (const t of transactions) {
-      if (t.kind === "expense" && t.category && t.category in out) {
-        out[t.category] += Number(t.amount);
-      }
+      if (t.kind === "expense" && t.category) out[t.category] += Number(t.amount);
     }
     return out;
-  }, [transactions, names]);
+  }, [transactions]);
 
   const totalIncome = useMemo(
     () => transactions.filter((t) => t.kind === "income").reduce((s, t) => s + Number(t.amount), 0),
@@ -107,26 +98,30 @@ export default function Dashboard() {
   );
 
   const percentByCategory = useMemo(() => {
-    const out = zeroMap(names);
-    for (const b of budgets) {
-      if (b.category in out) out[b.category] = Number(b.percent);
-    }
+    const out: Record<Category, number> = {
+      Housing: 0, Food: 0, Transport: 0, Utilities: 0,
+      Entertainment: 0, Shopping: 0, Other: 0,
+    };
+    for (const b of budgets) out[b.category] = Number(b.percent);
     return out;
-  }, [budgets, names]);
+  }, [budgets]);
 
   const budgetByCategory = useMemo(() => {
-    const out = zeroMap(names);
-    for (const c of names) out[c] = (percentByCategory[c] / 100) * totalIncome;
+    const out: Record<Category, number> = {
+      Housing: 0, Food: 0, Transport: 0, Utilities: 0,
+      Entertainment: 0, Shopping: 0, Other: 0,
+    };
+    for (const c of CATEGORIES) out[c] = (percentByCategory[c] / 100) * totalIncome;
     return out;
-  }, [percentByCategory, totalIncome, names]);
+  }, [percentByCategory, totalIncome]);
 
   const totalBudget = useMemo(
-    () => names.reduce((s, c) => s + budgetByCategory[c], 0),
-    [budgetByCategory, names]
+    () => CATEGORIES.reduce((s, c) => s + budgetByCategory[c], 0),
+    [budgetByCategory]
   );
   const totalSpent = useMemo(
-    () => names.reduce((s, c) => s + spentByCategory[c], 0),
-    [spentByCategory, names]
+    () => CATEGORIES.reduce((s, c) => s + spentByCategory[c], 0),
+    [spentByCategory]
   );
   const totalSavings = useMemo(
     () => savings.reduce((s, x) => s + Number(x.amount), 0),
@@ -138,12 +133,12 @@ export default function Dashboard() {
   const savingsRate = totalIncome > 0 ? (totalSavings / totalIncome) * 100 : 0;
 
   const chartData = useMemo(() => {
-    const slices: { name: string; value: number; color: string }[] = names
+    const slices: { name: string; value: number; color: string }[] = CATEGORIES
       .filter((c) => spentByCategory[c] > 0)
       .map((c) => ({
         name: c,
         value: spentByCategory[c],
-        color: colors[c] ?? "#c9a98b",
+        color: CATEGORY_COLORS[c],
       }));
     const remaining = Math.max(0, totalBudget - totalSpent);
     if (remaining > 0 || slices.length === 0) {
@@ -154,17 +149,13 @@ export default function Dashboard() {
       });
     }
     return slices;
-  }, [spentByCategory, totalBudget, totalSpent, names, colors]);
+  }, [spentByCategory, totalBudget, totalSpent]);
 
   async function submitEntry(e: React.FormEvent) {
     e.preventDefault();
     const amt = Number(entry.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       setError("Amount must be greater than 0");
-      return;
-    }
-    if (entry.kind === "expense" && names.length === 0) {
-      setError("Add at least one category in Settings");
       return;
     }
     setSubmitting(true);
@@ -215,8 +206,6 @@ export default function Dashboard() {
     else await loadAll();
   }
 
-  const pageLoading = categoriesLoading || loading;
-
   return (
     <div>
       <div className="page-title">
@@ -224,7 +213,7 @@ export default function Dashboard() {
         <span className="period">{formatMonthYear(year, month)}</span>
       </div>
 
-      {pageLoading ? (
+      {loading ? (
         <p className="muted">Loading…</p>
       ) : (
         <div className="grid">
@@ -273,14 +262,14 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="legend">
-                {names.map((c) => {
+                {CATEGORIES.map((c) => {
                   const spent = spentByCategory[c];
                   const budget = budgetByCategory[c];
                   return (
                     <div className="legend-row" key={c}>
                       <span
                         className="legend-swatch"
-                        style={{ background: spent > 0 ? (colors[c] ?? "#c9a98b") : UNUSED_COLOR }}
+                        style={{ background: spent > 0 ? CATEGORY_COLORS[c] : UNUSED_COLOR }}
                       />
                       <span>{c}</span>
                       <span className="legend-amount">
@@ -352,10 +341,10 @@ export default function Dashboard() {
                 <select
                   value={entry.category}
                   onChange={(e) =>
-                    setEntry((p) => ({ ...p, category: e.target.value }))
+                    setEntry((p) => ({ ...p, category: e.target.value as Category }))
                   }
                 >
-                  {names.map((c) => (
+                  {CATEGORIES.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>

@@ -1,7 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
-import { CategoriesProvider } from "./context/CategoriesContext";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import "./index.css";
@@ -28,8 +27,6 @@ function App() {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <CategoriesProvider>
-      <App />
-    </CategoriesProvider>
+    <App />
   </React.StrictMode>
 );
