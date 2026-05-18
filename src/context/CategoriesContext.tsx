@@ -33,7 +33,7 @@ type CategoriesContextValue = {
     color: string
   ) => Promise<string | null>;
   removeCategory: (id: string, name: string, moveToName?: string) => Promise<string | null>;
-  moveCategory: (id: string, direction: "up" | "down") => Promise<string | null>;
+  reorderCategoryList: (orderedIds: string[]) => Promise<string | null>;
 };
 
 const CategoriesContext = createContext<CategoriesContextValue | null>(null);
@@ -116,27 +116,20 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const moveCategory = useCallback(
-    async (id: string, direction: "up" | "down") => {
-      const index = categories.findIndex((c) => c.id === id);
-      if (index < 0) return "Category not found";
-      const swapIndex = direction === "up" ? index - 1 : index + 1;
-      if (swapIndex < 0 || swapIndex >= categories.length) return null;
-
-      const reordered = [...categories];
-      [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
-      const err = await reorderCategories(reordered.map((c) => c.id));
-      if (err) return err;
-      setCategories(
-        reordered.map((c, i) => ({
-          ...c,
-          sort_order: i,
-        }))
-      );
-      return null;
-    },
-    [categories]
-  );
+  const reorderCategoryList = useCallback(async (orderedIds: string[]) => {
+    const err = await reorderCategories(orderedIds);
+    if (err) return err;
+    const byId = new Map(categories.map((c) => [c.id, c]));
+    setCategories(
+      orderedIds
+        .map((id, i) => {
+          const row = byId.get(id);
+          return row ? { ...row, sort_order: i } : null;
+        })
+        .filter((c): c is CategoryRow => c !== null)
+    );
+    return null;
+  }, [categories]);
 
   const value: CategoriesContextValue = {
     categories,
@@ -148,7 +141,7 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
     createCategory,
     saveCategory,
     removeCategory,
-    moveCategory,
+    reorderCategoryList,
   };
 
   return (

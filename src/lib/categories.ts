@@ -1,6 +1,12 @@
 import { supabase } from "./supabase";
 import type { CategoryRow } from "../types";
 
+/** Categories reserved for savings / investments (excluded from spendable budget). */
+export function isSetAsideCategory(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  return lower.includes("saving") || lower.includes("investment");
+}
+
 export const DEFAULT_CATEGORIES: Pick<CategoryRow, "name" | "color" | "sort_order">[] = [
   { name: "Housing", color: "#c4a7cc", sort_order: 0 },
   { name: "Food", color: "#f5b88f", sort_order: 1 },

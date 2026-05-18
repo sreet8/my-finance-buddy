@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import {
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  type TooltipProps,
+} from "recharts";
 import { useCategories } from "../context/CategoriesContext";
 import { supabase } from "../lib/supabase";
-import {
-  Budget,
-  SavingsContribution,
-  Transaction,
-  UNUSED_COLOR,
-} from "../types";
+import { Budget, Transaction, UNUSED_COLOR } from "../types";
 import { formatMonthYear, formatUSD, monthRange } from "../lib/format";
 
 type NewEntry = {
-  kind: "income" | "expense" | "savings";
+  kind: "income" | "expense";
   amount: string;
   category: string;
   note: string;
@@ -28,6 +30,36 @@ function zeroMap(names: string[]): Record<string, number> {
   return Object.fromEntries(names.map((n) => [n, 0]));
 }
 
+const PIE_SIZE = 240;
+const PIE_CENTER = PIE_SIZE / 2;
+const PIE_TOOLTIP_OFFSET = 52;
+
+function PieTooltip({
+  active,
+  payload,
+  coordinate,
+}: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
+  const item = payload[0];
+  const x = coordinate?.x ?? PIE_CENTER;
+  const y = coordinate?.y ?? PIE_CENTER;
+  const dx = x - PIE_CENTER;
+  const dy = y - PIE_CENTER;
+  const len = Math.hypot(dx, dy) || 1;
+  const shiftX = (dx / len) * PIE_TOOLTIP_OFFSET;
+  const shiftY = (dy / len) * PIE_TOOLTIP_OFFSET - 24;
+
+  return (
+    <div
+      className="pie-tooltip"
+      style={{ transform: `translate(${shiftX}px, ${shiftY}px)` }}
+    >
+      <span className="pie-tooltip-name">{item.name}</span>
+      <span className="pie-tooltip-value">{formatUSD(Number(item.value))}</span>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { names, colors, loading: categoriesLoading } = useCategories();
 
@@ -38,7 +70,6 @@ export default function Dashboard() {
 
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [savings, setSavings] = useState<SavingsContribution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,7 +91,7 @@ export default function Dashboard() {
   async function loadAll() {
     setLoading(true);
     setError(null);
-    const [b, t, s] = await Promise.all([
+    const [b, t] = await Promise.all([
       supabase.from("budgets").select("*").eq("year", year).eq("month", month),
       supabase
         .from("transactions")
@@ -68,21 +99,14 @@ export default function Dashboard() {
         .gte("occurred_on", start)
         .lte("occurred_on", end)
         .order("occurred_on", { ascending: false }),
-      supabase
-        .from("savings_contributions")
-        .select("*")
-        .gte("occurred_on", start)
-        .lte("occurred_on", end)
-        .order("occurred_on", { ascending: false }),
     ]);
-    if (b.error || t.error || s.error) {
-      setError(b.error?.message ?? t.error?.message ?? s.error?.message ?? "Load failed");
+    if (b.error || t.error) {
+      setError(b.error?.message ?? t.error?.message ?? "Load failed");
       setLoading(false);
       return;
     }
     setBudgets((b.data ?? []) as Budget[]);
     setTransactions((t.data ?? []) as Transaction[]);
-    setSavings((s.data ?? []) as SavingsContribution[]);
     setLoading(false);
   }
 
@@ -128,14 +152,9 @@ export default function Dashboard() {
     () => names.reduce((s, c) => s + spentByCategory[c], 0),
     [spentByCategory, names]
   );
-  const totalSavings = useMemo(
-    () => savings.reduce((s, x) => s + Number(x.amount), 0),
-    [savings]
-  );
 
   const overBudget = totalSpent > totalBudget && totalBudget > 0;
   const percentSpent = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
-  const savingsRate = totalIncome > 0 ? (totalSavings / totalIncome) * 100 : 0;
 
   const chartData = useMemo(() => {
     const slices: { name: string; value: number; color: string }[] = names
@@ -170,30 +189,23 @@ export default function Dashboard() {
     setSubmitting(true);
     setError(null);
 
-    let res;
-    if (entry.kind === "income") {
-      res = await supabase.from("transactions").insert({
-        kind: "income",
-        amount: amt,
-        category: null,
-        note: entry.note || null,
-        occurred_on: entry.date,
-      });
-    } else if (entry.kind === "expense") {
-      res = await supabase.from("transactions").insert({
-        kind: "expense",
-        amount: amt,
-        category: entry.category,
-        note: entry.note || null,
-        occurred_on: entry.date,
-      });
-    } else {
-      res = await supabase.from("savings_contributions").insert({
-        amount: amt,
-        note: entry.note || null,
-        occurred_on: entry.date,
-      });
-    }
+    const res =
+      entry.kind === "income"
+        ? await supabase.from("transactions").insert({
+            kind: "income",
+            amount: amt,
+            category: null,
+            note: entry.note || null,
+            occurred_on: entry.date,
+          })
+        : await supabase.from("transactions").insert({
+            kind: "expense",
+            amount: amt,
+            category: entry.category,
+            note: entry.note || null,
+            occurred_on: entry.date,
+          });
+
     setSubmitting(false);
     if (res.error) {
       setError(res.error.message);
@@ -205,12 +217,6 @@ export default function Dashboard() {
 
   async function deleteTransaction(id: string) {
     const res = await supabase.from("transactions").delete().eq("id", id);
-    if (res.error) setError(res.error.message);
-    else await loadAll();
-  }
-
-  async function deleteSaving(id: string) {
-    const res = await supabase.from("savings_contributions").delete().eq("id", id);
     if (res.error) setError(res.error.message);
     else await loadAll();
   }
@@ -248,8 +254,10 @@ export default function Dashboard() {
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(v: number, n) => [formatUSD(Number(v)), n]}
-                      contentStyle={{ background: "#1e293b", border: "1px solid #334155" }}
+                      content={<PieTooltip />}
+                      allowEscapeViewBox={{ x: true, y: true }}
+                      wrapperStyle={{ zIndex: 20, outline: "none" }}
+                      cursor={false}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -298,33 +306,53 @@ export default function Dashboard() {
             )}
           </section>
 
-          <section className="card">
-            <h2>This month</h2>
-            <div className="stats">
+          <div className="dashboard-side">
+            <section className="card">
+              <h2>This month</h2>
+              <div className="stats">
               <div className="stat">
                 <span className="label">Income</span>
                 <span className="value success">{formatUSD(totalIncome)}</span>
               </div>
               <div className="stat">
                 <span className="label">Spent</span>
-                <span className={`value ${overBudget ? "danger" : ""}`}>{formatUSD(totalSpent)}</span>
+                <span className="value danger">{formatUSD(totalSpent)}</span>
               </div>
-              <div className="stat">
-                <span className="label">Budget</span>
-                <span className="value">{formatUSD(totalBudget)}</span>
               </div>
-              <div className="stat">
-                <span className="label">Savings</span>
-                <span className="value success">{formatUSD(totalSavings)}</span>
-              </div>
-              <div className="stat">
-                <span className="label">Savings rate</span>
-                <span className="value">
-                  {totalIncome > 0 ? `${Math.round(savingsRate)}%` : "—"}
-                </span>
-              </div>
-            </div>
-          </section>
+            </section>
+
+            <section className="card">
+              <h2>Recent activity</h2>
+              {transactions.length === 0 ? (
+                <p className="muted">No entries yet this month.</p>
+              ) : (
+                <div className="tx-list">
+                  {transactions.map((t) => (
+                    <div className="tx-row" key={t.id}>
+                      <span className="date">{t.occurred_on}</span>
+                      <span className="tx-label">
+                        <span className="tx-category">
+                          {t.kind === "income" ? "Income" : t.category}
+                        </span>
+                        {t.note ? <span className="tx-note"> · {t.note}</span> : null}
+                      </span>
+                      <span className={`amt ${t.kind}`}>
+                        {t.kind === "income" ? "+" : "−"}
+                        {formatUSD(Number(t.amount))}
+                      </span>
+                      <button
+                        className="del"
+                        aria-label="delete"
+                        onClick={() => deleteTransaction(t.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
 
           <section className="card grid-full">
             <h2>Add entry</h2>
@@ -337,7 +365,6 @@ export default function Dashboard() {
               >
                 <option value="expense">Expense</option>
                 <option value="income">Income</option>
-                <option value="savings">Savings</option>
               </select>
               <input
                 type="number"
@@ -379,50 +406,6 @@ export default function Dashboard() {
               onChange={(e) => setEntry((p) => ({ ...p, date: e.target.value }))}
             />
             {error && <div className="error">{error}</div>}
-          </section>
-
-          <section className="card grid-full">
-            <h2>Recent activity</h2>
-            {transactions.length === 0 && savings.length === 0 ? (
-              <p className="muted">No entries yet this month.</p>
-            ) : (
-              <div className="tx-list">
-                {transactions.map((t) => (
-                  <div className="tx-row" key={`t-${t.id}`}>
-                    <span className="date">{t.occurred_on}</span>
-                    <span>
-                      {t.kind === "income" ? "Income" : t.category}
-                      {t.note ? ` · ${t.note}` : ""}
-                    </span>
-                    <span className={`amt ${t.kind}`}>
-                      {t.kind === "income" ? "+" : "−"}
-                      {formatUSD(Number(t.amount))}
-                    </span>
-                    <button
-                      className="del"
-                      aria-label="delete"
-                      onClick={() => deleteTransaction(t.id)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                {savings.map((s) => (
-                  <div className="tx-row" key={`s-${s.id}`}>
-                    <span className="date">{s.occurred_on}</span>
-                    <span>Savings{s.note ? ` · ${s.note}` : ""}</span>
-                    <span className="amt income">+{formatUSD(Number(s.amount))}</span>
-                    <button
-                      className="del"
-                      aria-label="delete"
-                      onClick={() => deleteSaving(s.id)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </div>
       )}

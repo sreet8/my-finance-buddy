@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
+import CategoryList from "../components/CategoryList";
 import { useCategories } from "../context/CategoriesContext";
 import { getCategoryUsage } from "../lib/categories";
 import { supabase } from "../lib/supabase";
@@ -30,7 +31,7 @@ export default function Settings() {
     createCategory,
     saveCategory,
     removeCategory,
-    moveCategory,
+    reorderCategoryList,
     refresh: refreshCategories,
   } = useCategories();
 
@@ -40,6 +41,7 @@ export default function Settings() {
   const { start, end } = useMemo(() => monthRange(year, month), [year, month]);
 
   const [loading, setLoading] = useState(true);
+  const budgetsLoadedOnce = useRef(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -60,8 +62,14 @@ export default function Settings() {
     setCategoryDrafts(next);
   }, [categories]);
 
-  async function loadBudgets() {
-    setLoading(true);
+  const categorySetKey = useMemo(
+    () => [...names].sort().join("\0"),
+    [names]
+  );
+
+  async function loadBudgets(options?: { background?: boolean }) {
+    const background = options?.background ?? false;
+    if (!background) setLoading(true);
     setError(null);
     const [budgetsRes, incomeRes] = await Promise.all([
       supabase.from("budgets").select("*").eq("year", year).eq("month", month),
@@ -74,25 +82,30 @@ export default function Settings() {
     ]);
     if (budgetsRes.error || incomeRes.error) {
       setError(budgetsRes.error?.message ?? incomeRes.error?.message ?? "Load failed");
-      setLoading(false);
+      if (!background) setLoading(false);
       return;
     }
     const next: DraftMap = {};
     for (const n of names) next[n] = "0";
     for (const row of (budgetsRes.data ?? []) as Budget[]) {
-      next[row.category] = String(Number(row.percent));
+      if (names.includes(row.category)) {
+        next[row.category] = String(Math.round(Number(row.percent)));
+      }
     }
     setDraft(next);
     setMonthIncome(
       (incomeRes.data ?? []).reduce((s: number, r: { amount: number }) => s + Number(r.amount), 0)
     );
-    setLoading(false);
+    budgetsLoadedOnce.current = true;
+    if (!background) setLoading(false);
   }
 
   useEffect(() => {
-    if (!categoriesLoading && names.length > 0) loadBudgets();
+    if (!categoriesLoading && names.length > 0) {
+      loadBudgets({ background: budgetsLoadedOnce.current });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month, categoriesLoading, names.join("|")]);
+  }, [year, month, categoriesLoading, categorySetKey]);
 
   const totalPercent = useMemo(
     () => names.reduce((s, c) => s + (Number(draft[c]) || 0), 0),
@@ -142,7 +155,7 @@ export default function Settings() {
     const err = await saveCategory(id, originalName, d.name, d.color);
     setCategoryBusy(null);
     if (err) setError(err);
-    else await loadBudgets();
+    else await loadBudgets({ background: true });
   }
 
   async function handleDeleteCategory(id: string, name: string) {
@@ -173,7 +186,7 @@ export default function Settings() {
     const err = await removeCategory(id, name);
     setCategoryBusy(null);
     if (err) setError(err);
-    else await loadBudgets();
+    else await loadBudgets({ background: true });
   }
 
   async function confirmDeleteWithMove() {
@@ -185,7 +198,7 @@ export default function Settings() {
     if (err) setError(err);
     else {
       setDeletePrompt(null);
-      await loadBudgets();
+      await loadBudgets({ background: true });
     }
   }
 
@@ -201,10 +214,10 @@ export default function Settings() {
       <section className="card">
         <h2>Categories</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Add, rename, recolor, reorder, or remove expense categories. Changes are saved to your database.
+          Add, rename, recolor, drag to reorder, or remove expense categories. Changes are saved to your database.
         </p>
         {categoriesLoading ? (
-          <p className="muted">Loading categories…</p>
+          <p className="muted">Loading categoriesâ€¦</p>
         ) : categoriesError ? (
           <div className="error">
             {categoriesError}
@@ -214,83 +227,18 @@ export default function Settings() {
           </div>
         ) : (
           <>
-            <div className="category-list">
-              {categories.map((c, index) => {
-                const d = categoryDrafts[c.id] ?? { name: c.name, color: c.color };
-                return (
-                  <div className="category-row" key={c.id}>
-                    <div className="category-reorder">
-                      <button
-                        type="button"
-                        className="secondary icon-btn"
-                        aria-label={`Move ${c.name} up`}
-                        disabled={categoryBusy === c.id || index === 0}
-                        onClick={async () => {
-                          setCategoryBusy(c.id);
-                          setError(null);
-                          const err = await moveCategory(c.id, "up");
-                          setCategoryBusy(null);
-                          if (err) setError(err);
-                        }}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary icon-btn"
-                        aria-label={`Move ${c.name} down`}
-                        disabled={categoryBusy === c.id || index === categories.length - 1}
-                        onClick={async () => {
-                          setCategoryBusy(c.id);
-                          setError(null);
-                          const err = await moveCategory(c.id, "down");
-                          setCategoryBusy(null);
-                          if (err) setError(err);
-                        }}
-                      >
-                        ↓
-                      </button>
-                    </div>
-                    <input
-                      type="color"
-                      aria-label={`Color for ${c.name}`}
-                      value={d.color}
-                      onChange={(e) =>
-                        setCategoryDrafts((p) => ({
-                          ...p,
-                          [c.id]: { ...d, color: e.target.value },
-                        }))
-                      }
-                    />
-                    <input
-                      type="text"
-                      value={d.name}
-                      onChange={(e) =>
-                        setCategoryDrafts((p) => ({
-                          ...p,
-                          [c.id]: { ...d, name: e.target.value },
-                        }))
-                      }
-                    />
-                    <button
-                      className="secondary"
-                      disabled={categoryBusy === c.id}
-                      onClick={() => handleSaveCategory(c.id, c.name)}
-                    >
-                      {categoryBusy === c.id ? "Saving…" : "Save"}
-                    </button>
-                    <button
-                      className="secondary"
-                      disabled={categoryBusy === c.id || categories.length <= 1}
-                      onClick={() => handleDeleteCategory(c.id, c.name)}
-                      title={categories.length <= 1 ? "At least one category is required" : undefined}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            <CategoryList
+              categories={categories}
+              categoryDrafts={categoryDrafts}
+              categoryBusy={categoryBusy}
+              onDraftChange={(id, draft) =>
+                setCategoryDrafts((p) => ({ ...p, [id]: draft }))
+              }
+              onSave={handleSaveCategory}
+              onDelete={handleDeleteCategory}
+              onReorder={reorderCategoryList}
+              onError={setError}
+            />
             <form className="category-add" onSubmit={handleAddCategory}>
               <input
                 type="color"
@@ -306,7 +254,7 @@ export default function Settings() {
                 required
               />
               <button type="submit" disabled={categoryBusy === "add"}>
-                {categoryBusy === "add" ? "Adding…" : "Add category"}
+                {categoryBusy === "add" ? "Addingâ€¦" : "Add category"}
               </button>
             </form>
             {deletePrompt && (
@@ -338,7 +286,7 @@ export default function Settings() {
                     disabled={categoryBusy === deletePrompt.id}
                     onClick={confirmDeleteWithMove}
                   >
-                    {categoryBusy === deletePrompt.id ? "Deleting…" : "Move & delete"}
+                    {categoryBusy === deletePrompt.id ? "Deletingâ€¦" : "Move & delete"}
                   </button>
                   <button
                     className="secondary"
@@ -371,35 +319,63 @@ export default function Settings() {
 
         <h2>Budget percentage by category</h2>
         {!showBudget ? (
-          <p className="muted">Loading…</p>
+          <p className="muted">Loadingâ€¦</p>
         ) : loading ? (
-          <p className="muted">Loading budgets…</p>
+          <p className="muted">Loading budgetsâ€¦</p>
         ) : (
           <div className="budget-table">
-            {names.map((c) => (
-              <div className="budget-row" key={c}>
-                <span className="swatch" style={{ background: colors[c] ?? "#c9a98b" }} />
-                <label>{c}</label>
-                <span className="percent-suffix">
-                  <input
-                    type="number"
-                    step="1"
-                    min="0"
-                    max="100"
-                    value={draft[c] ?? "0"}
-                    onChange={(e) => setDraft((p) => ({ ...p, [c]: e.target.value }))}
-                  />
-                </span>
-                <span className="estimate">≈ {formatUSD(estimatedDollars(draft[c] ?? "0"))}</span>
-              </div>
-            ))}
-            <div className="budget-row">
+            {names.map((c) => {
+              const raw = draft[c] ?? "0";
+              return (
+                <div className="budget-row" key={c}>
+                  <span className="swatch" style={{ background: colors[c] ?? "#c9a98b" }} />
+                  <label>{c}</label>
+                  <div className="budget-alloc">
+                    <span className="percent-suffix">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        aria-label={`${c} budget percent`}
+                        value={raw}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === "" || /^\d{0,3}$/.test(v)) {
+                            setDraft((p) => ({
+                              ...p,
+                              [c]: v === "" ? "" : String(Math.min(100, parseInt(v, 10))),
+                            }));
+                          }
+                        }}
+                        onBlur={() => {
+                          setDraft((p) => ({
+                            ...p,
+                            [c]:
+                              p[c] === "" || p[c] === undefined
+                                ? "0"
+                                : String(Math.min(100, Number(p[c]) || 0)),
+                          }));
+                        }}
+                      />
+                    </span>
+                    <span className="budget-dollar">
+                      {formatUSD(estimatedDollars(raw === "" ? "0" : raw))}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="budget-row budget-row-total">
               <span />
-              <strong>Total</strong>
-              <strong style={{ textAlign: "right" }}>{totalPercent}%</strong>
-              <strong className="estimate">
-                ≈ {formatUSD(totalPercent * monthIncome / 100)}
+              <strong>
+                Total <span className="muted">({totalPercent}%)</span>
               </strong>
+              <div className="budget-alloc">
+                <span className="budget-alloc-spacer" aria-hidden />
+                <strong className="budget-dollar">
+                  {formatUSD(totalPercent * monthIncome / 100)}
+                </strong>
+              </div>
             </div>
             {overAllocated && (
               <div className="warn">
@@ -408,14 +384,18 @@ export default function Settings() {
             )}
             {!overAllocated && totalPercent < 100 && (
               <p className="muted">
-                {100 - totalPercent}% unallocated — room for savings or buffer.
+                {100 - totalPercent}% unallocated â€” room for savings or buffer.
               </p>
             )}
             <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginTop: "0.5rem" }}>
               <button onClick={saveBudgets} disabled={saving}>
-                {saving ? "Saving…" : "Save budget"}
+                {saving ? "Savingâ€¦" : "Save budget"}
               </button>
-              <button className="secondary" onClick={loadBudgets} disabled={saving}>
+              <button
+                className="secondary"
+                onClick={() => loadBudgets({ background: true })}
+                disabled={saving}
+              >
                 Revert
               </button>
               {savedAt && <span className="muted">Saved {savedAt.toLocaleTimeString()}</span>}
