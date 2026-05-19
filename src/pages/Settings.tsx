@@ -214,7 +214,9 @@ export default function Settings() {
       <section className="card">
         <h2>Categories</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Add, rename, recolor, drag to reorder, or remove expense categories. Changes are saved to your database.
+          Add, rename, recolor, drag to reorder, or remove categories. Names with Savings
+          or Investment in them are tracked under Savings & Investments on the Dashboard, not
+          as expenses.
         </p>
         {categoriesLoading ? (
           <p className="muted">Loading categoriesâ€¦</p>
