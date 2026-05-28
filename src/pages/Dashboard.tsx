@@ -47,9 +47,108 @@ function zeroMap(names: string[]): Record<string, number> {
   return Object.fromEntries(names.map((n) => [n, 0]));
 }
 
-const PIE_SIZE = 240;
+const PIE_SIZE = 200;
 const PIE_CENTER = PIE_SIZE / 2;
 const PIE_TOOLTIP_OFFSET = 52;
+
+type ChartSlice = { name: string; value: number; color: string };
+
+function buildChartSlices(
+  categoryNames: string[],
+  spentByCategory: Record<string, number>,
+  totalBudget: number,
+  totalSpent: number,
+  colors: Record<string, string>
+): ChartSlice[] {
+  const slices: ChartSlice[] = categoryNames
+    .filter((c) => spentByCategory[c] > 0)
+    .map((c) => ({
+      name: c,
+      value: spentByCategory[c],
+      color: colors[c] ?? "#c9a98b",
+    }));
+  const remaining = Math.max(0, totalBudget - totalSpent);
+  if (remaining > 0 || slices.length === 0) {
+    slices.push({
+      name: totalBudget === 0 ? "No budget set" : "Unused",
+      value: remaining > 0 ? remaining : 1,
+      color: UNUSED_COLOR,
+    });
+  }
+  return slices;
+}
+
+function BudgetPieBlock({
+  label,
+  categoryNames,
+  spentByCategory,
+  budgetByCategory,
+  colors,
+}: {
+  label: string;
+  categoryNames: string[];
+  spentByCategory: Record<string, number>;
+  budgetByCategory: Record<string, number>;
+  colors: Record<string, string>;
+}) {
+  const totalBudget = categoryNames.reduce((s, c) => s + budgetByCategory[c], 0);
+  const totalSpent = categoryNames.reduce((s, c) => s + spentByCategory[c], 0);
+  const percentAllocated =
+    totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
+  const chartData = useMemo(
+    () =>
+      buildChartSlices(
+        categoryNames,
+        spentByCategory,
+        totalBudget,
+        totalSpent,
+        colors
+      ),
+    [categoryNames, spentByCategory, totalBudget, totalSpent, colors]
+  );
+
+  return (
+    <div className="pie-block">
+      <h3 className="pie-block-title">{label}</h3>
+      <div className="pie-chart-container">
+        <ResponsiveContainer width={PIE_SIZE} height={PIE_SIZE}>
+          <PieChart>
+            <Pie
+              data={chartData}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={58}
+              outerRadius={92}
+              paddingAngle={1}
+              isAnimationActive={false}
+            >
+              {chartData.map((d, i) => (
+                <Cell key={i} fill={d.color} stroke="none" />
+              ))}
+            </Pie>
+            <Tooltip
+              content={<PieTooltip />}
+              allowEscapeViewBox={{ x: true, y: true }}
+              wrapperStyle={{ zIndex: 20, outline: "none" }}
+              cursor={false}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="pie-center-label">
+          <div className="pie-center-percent">
+            {totalBudget === 0 ? "—" : `${Math.round(percentAllocated)}%`}
+          </div>
+          <div className="muted pie-center-caption">
+            {totalBudget === 0 ? "no budget" : "allocated"}
+          </div>
+        </div>
+      </div>
+      <div className="pie-tally">
+        {formatUSD(totalSpent)} / {formatUSD(totalBudget)}
+      </div>
+    </div>
+  );
+}
 
 function PieTooltip({
   active,
@@ -151,7 +250,8 @@ export default function Dashboard() {
         .select("*")
         .gte("occurred_on", start)
         .lte("occurred_on", end)
-        .order("occurred_on", { ascending: false }),
+        .order("occurred_on", { ascending: false })
+        .order("created_at", { ascending: false }),
       supabase
         .from("transactions")
         .select("kind, amount")
@@ -241,42 +341,22 @@ export default function Dashboard() {
     [spentByCategory, expenseNames]
   );
 
-  const chartTotalBudget = useMemo(
-    () => names.reduce((s, c) => s + budgetByCategoryAll[c], 0),
-    [budgetByCategoryAll, names]
-  );
-  const chartTotalSpent = useMemo(
-    () => names.reduce((s, c) => s + allSpentByCategory[c], 0),
-    [allSpentByCategory, names]
-  );
-
   const totalSetAside = useMemo(
     () => setAsideNames.reduce((s, c) => s + allSpentByCategory[c], 0),
     [allSpentByCategory, setAsideNames]
   );
 
   const overBudget = totalSpent > totalBudget && totalBudget > 0;
-  const percentChartSpent =
-    chartTotalBudget > 0 ? (chartTotalSpent / chartTotalBudget) * 100 : 0;
 
-  const chartData = useMemo(() => {
-    const slices: { name: string; value: number; color: string }[] = names
-      .filter((c) => allSpentByCategory[c] > 0)
-      .map((c) => ({
-        name: c,
-        value: allSpentByCategory[c],
-        color: colors[c] ?? "#c9a98b",
-      }));
-    const remaining = Math.max(0, chartTotalBudget - chartTotalSpent);
-    if (remaining > 0 || slices.length === 0) {
-      slices.push({
-        name: chartTotalBudget === 0 ? "No budget set" : "Unused",
-        value: remaining > 0 ? remaining : 1,
-        color: UNUSED_COLOR,
-      });
-    }
-    return slices;
-  }, [allSpentByCategory, chartTotalBudget, chartTotalSpent, names, colors]);
+  const recentTransactions = useMemo(() => {
+    return [...transactions].sort((a, b) => {
+      const byDate = b.occurred_on.localeCompare(a.occurred_on);
+      if (byDate !== 0) return byDate;
+      const aEntered = a.created_at ?? "";
+      const bEntered = b.created_at ?? "";
+      return bEntered.localeCompare(aEntered);
+    });
+  }, [transactions]);
 
   async function submitEntry(e: React.FormEvent) {
     e.preventDefault();
@@ -360,59 +440,36 @@ export default function Dashboard() {
           <section className="card chart-card">
             <h2>Spending VS Budget</h2>
             <div className="chart-wrap">
-              <div style={{ width: 240, height: 240, position: "relative" }}>
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie
-                      data={chartData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={70}
-                      outerRadius={110}
-                      paddingAngle={1}
-                      isAnimationActive={false}
-                    >
-                      {chartData.map((d, i) => (
-                        <Cell key={i} fill={d.color} stroke="none" />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      content={<PieTooltip />}
-                      allowEscapeViewBox={{ x: true, y: true }}
-                      wrapperStyle={{ zIndex: 20, outline: "none" }}
-                      cursor={false}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
-                    {chartTotalBudget === 0 ? "—" : `${Math.round(percentChartSpent)}%`}
-                  </div>
-                  <div className="muted" style={{ fontSize: "0.8rem" }}>
-                    {chartTotalBudget === 0 ? "no budget" : "allocated"}
-                  </div>
-                </div>
+              <div className="charts-dual">
+                <BudgetPieBlock
+                  label="Spending"
+                  categoryNames={expenseNames}
+                  spentByCategory={spentByCategory}
+                  budgetByCategory={budgetByCategory}
+                  colors={colors}
+                />
+                <BudgetPieBlock
+                  label="Savings & Investments"
+                  categoryNames={setAsideNames}
+                  spentByCategory={allSpentByCategory}
+                  budgetByCategory={budgetByCategoryAll}
+                  colors={colors}
+                />
               </div>
-              <div className="legend">
-                {names.map((c) => {
-                      const spent = allSpentByCategory[c];
-                      const budget = budgetByCategoryAll[c];
+              <div className="legend-split">
+                {expenseNames.length > 0 && (
+                  <div className="legend">
+                    <div className="legend-heading">Spending</div>
+                    {expenseNames.map((c) => {
+                      const spent = spentByCategory[c];
+                      const budget = budgetByCategory[c];
                       return (
                         <div className="legend-row" key={c}>
                           <span
                             className="legend-swatch"
                             style={{
-                              background: spent > 0 ? (colors[c] ?? "#c9a98b") : UNUSED_COLOR,
+                              background:
+                                spent > 0 ? (colors[c] ?? "#c9a98b") : UNUSED_COLOR,
                             }}
                           />
                           <span>{c}</span>
@@ -421,7 +478,33 @@ export default function Dashboard() {
                           </span>
                         </div>
                       );
-                })}
+                    })}
+                  </div>
+                )}
+                {setAsideNames.length > 0 && (
+                  <div className="legend">
+                    <div className="legend-heading">Savings & Investments</div>
+                    {setAsideNames.map((c) => {
+                      const spent = allSpentByCategory[c];
+                      const budget = budgetByCategoryAll[c];
+                      return (
+                        <div className="legend-row" key={c}>
+                          <span
+                            className="legend-swatch"
+                            style={{
+                              background:
+                                spent > 0 ? (colors[c] ?? "#c9a98b") : UNUSED_COLOR,
+                            }}
+                          />
+                          <span>{c}</span>
+                          <span className="legend-amount">
+                            {formatUSD(spent)} / {formatUSD(budget)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
             {overBudget && (
@@ -448,7 +531,7 @@ export default function Dashboard() {
                 </div>
               </div>
               {setAsideNames.length > 0 && (
-                <div className="stat">
+                <div className="stat stat-set-aside">
                   <div className="stat-inner">
                     <span className="label">Savings & Investments</span>
                     <span className="value success">{formatUSD(totalSetAside)}</span>
@@ -469,11 +552,11 @@ export default function Dashboard() {
             <section className="card recent-activity-card">
               <h2>Recent Activity</h2>
               <div className="recent-activity-body">
-              {transactions.length === 0 ? (
+              {recentTransactions.length === 0 ? (
                 <p className="muted">No entries for {formatMonthYear(year, month)}.</p>
               ) : (
                 <div className="tx-list">
-                  {transactions.map((t) => {
+                  {recentTransactions.map((t) => {
                     const setAside =
                       t.kind === "expense" && t.category && isSetAsideCategory(t.category);
                     const amtClass =

@@ -32,7 +32,8 @@ create table if not exists public.transactions (
   amount numeric not null check (amount > 0),
   category text,
   note text,
-  occurred_on date not null
+  occurred_on date not null,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists public.savings_contributions (
