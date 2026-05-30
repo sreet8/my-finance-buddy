@@ -43,10 +43,21 @@ create table if not exists public.savings_contributions (
   occurred_on date not null
 );
 
+-- Custom income figure to budget against for a given month. Set in Settings and
+-- independent of income transactions; defaults to 0 for months never configured.
+create table if not exists public.monthly_income (
+  id uuid primary key default gen_random_uuid(),
+  year int not null,
+  month int not null check (month between 1 and 12),
+  amount numeric not null default 0 check (amount >= 0),
+  unique (year, month)
+);
+
 alter table public.categories enable row level security;
 alter table public.budgets enable row level security;
 alter table public.transactions enable row level security;
 alter table public.savings_contributions enable row level security;
+alter table public.monthly_income enable row level security;
 
 create policy "categories_anon_all" on public.categories
   for all to anon using (true) with check (true);
@@ -58,4 +69,7 @@ create policy "transactions_anon_all" on public.transactions
   for all to anon using (true) with check (true);
 
 create policy "savings_anon_all" on public.savings_contributions
+  for all to anon using (true) with check (true);
+
+create policy "monthly_income_anon_all" on public.monthly_income
   for all to anon using (true) with check (true);

@@ -1,11 +1,44 @@
 import { supabase } from "./supabase";
-import { formatMonthYear } from "./format";
+import { balanceFromTransactions, formatMonthYear, monthRange } from "./format";
 
 export type Period = { year: number; month: number };
 
 export function currentPeriod(): Period {
   const d = new Date();
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
+}
+
+export function previousPeriod(p: Period): Period {
+  if (p.month === 1) return { year: p.year - 1, month: 12 };
+  return { year: p.year, month: p.month - 1 };
+}
+
+/**
+ * Opening balance present before the app began tracking, seeded as of the start
+ * of May 2026. It flows into May 2026's starting balance and carries forward.
+ */
+const OPENING_BALANCE = 3804.37;
+
+function openingBalanceFor(period: Period): number {
+  const onOrAfterMay2026 =
+    period.year > 2026 || (period.year === 2026 && period.month >= 5);
+  return onOrAfterMay2026 ? OPENING_BALANCE : 0;
+}
+
+/**
+ * The month's starting balance: a seeded opening balance plus the net
+ * (income − expenses) of every transaction dated on or before the end of the
+ * previous month. This equals the previous month's ending balance, carried over.
+ */
+export async function fetchStartingBalance(period: Period): Promise<number> {
+  const prev = previousPeriod(period);
+  const { end } = monthRange(prev.year, prev.month);
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("kind, amount")
+    .lte("occurred_on", end);
+  const txnBalance = error ? 0 : balanceFromTransactions(data ?? []);
+  return openingBalanceFor(period) + txnBalance;
 }
 
 export function periodKey(p: Period): string {

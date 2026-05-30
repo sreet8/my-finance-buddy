@@ -12,7 +12,6 @@ import { isSetAsideCategory } from "../lib/categories";
 import { supabase } from "../lib/supabase";
 import { Budget, Transaction, UNUSED_COLOR } from "../types";
 import {
-  balanceFromTransactions,
   formatMonthYear,
   formatUSD,
   maxEntryDateForMonth,
@@ -21,6 +20,7 @@ import {
 import {
   currentPeriod,
   fetchAvailablePeriods,
+  fetchStartingBalance,
   formatPeriodLabel,
   parsePeriodKey,
   periodKey,
@@ -201,7 +201,8 @@ export default function Dashboard() {
 
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [balance, setBalance] = useState(0);
+  const [startingBalance, setStartingBalance] = useState(0);
+  const [budgetIncome, setBudgetIncome] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -242,8 +243,7 @@ export default function Dashboard() {
   async function loadAll() {
     setLoading(true);
     setError(null);
-    const balanceThrough = isCurrentMonth ? maxEntryDate : end;
-    const [b, t, bal] = await Promise.all([
+    const [b, t, starting, inc] = await Promise.all([
       supabase.from("budgets").select("*").eq("year", year).eq("month", month),
       supabase
         .from("transactions")
@@ -252,19 +252,24 @@ export default function Dashboard() {
         .lte("occurred_on", end)
         .order("occurred_on", { ascending: false })
         .order("created_at", { ascending: false }),
+      fetchStartingBalance({ year, month }),
       supabase
-        .from("transactions")
-        .select("kind, amount")
-        .lte("occurred_on", balanceThrough),
+        .from("monthly_income")
+        .select("amount")
+        .eq("year", year)
+        .eq("month", month)
+        .maybeSingle(),
     ]);
-    if (b.error || t.error || bal.error) {
-      setError(b.error?.message ?? t.error?.message ?? bal.error?.message ?? "Load failed");
+    if (b.error || t.error) {
+      setError(b.error?.message ?? t.error?.message ?? "Load failed");
       setLoading(false);
       return;
     }
     setBudgets((b.data ?? []) as Budget[]);
     setTransactions((t.data ?? []) as Transaction[]);
-    setBalance(balanceFromTransactions(bal.data ?? []));
+    setStartingBalance(starting);
+    // Budget income defaults to the month's starting balance until explicitly set.
+    setBudgetIncome(inc.data ? Number(inc.data.amount) : starting);
     setLoading(false);
     await refreshPeriods();
   }
@@ -299,9 +304,21 @@ export default function Dashboard() {
     return out;
   }, [transactions, names]);
 
-  const totalIncome = useMemo(
+  const monthIncomeTx = useMemo(
     () => transactions.filter((t) => t.kind === "income").reduce((s, t) => s + Number(t.amount), 0),
     [transactions]
+  );
+
+  const monthExpenseTotal = useMemo(
+    () => transactions.filter((t) => t.kind === "expense").reduce((s, t) => s + Number(t.amount), 0),
+    [transactions]
+  );
+
+  // Ending balance reflects every transaction to date: the carried-over starting
+  // balance plus this month's income, minus this month's spending.
+  const endingBalance = useMemo(
+    () => startingBalance + monthIncomeTx - monthExpenseTotal,
+    [startingBalance, monthIncomeTx, monthExpenseTotal]
   );
 
   const percentByCategory = useMemo(() => {
@@ -314,9 +331,9 @@ export default function Dashboard() {
 
   const budgetByCategory = useMemo(() => {
     const out = zeroMap(expenseNames);
-    for (const c of expenseNames) out[c] = (percentByCategory[c] / 100) * totalIncome;
+    for (const c of expenseNames) out[c] = (percentByCategory[c] / 100) * budgetIncome;
     return out;
-  }, [percentByCategory, totalIncome, expenseNames]);
+  }, [percentByCategory, budgetIncome, expenseNames]);
 
   const percentByCategoryAll = useMemo(() => {
     const out = zeroMap(names);
@@ -328,9 +345,9 @@ export default function Dashboard() {
 
   const budgetByCategoryAll = useMemo(() => {
     const out = zeroMap(names);
-    for (const c of names) out[c] = (percentByCategoryAll[c] / 100) * totalIncome;
+    for (const c of names) out[c] = (percentByCategoryAll[c] / 100) * budgetIncome;
     return out;
-  }, [percentByCategoryAll, totalIncome, names]);
+  }, [percentByCategoryAll, budgetIncome, names]);
 
   const totalBudget = useMemo(
     () => expenseNames.reduce((s, c) => s + budgetByCategory[c], 0),
@@ -520,8 +537,10 @@ export default function Dashboard() {
               <div className="stats stats-inline">
               <div className="stat">
                 <div className="stat-inner">
-                  <span className="label">Income</span>
-                  <span className="value success">{formatUSD(totalIncome)}</span>
+                  <span className="label">Starting Balance</span>
+                  <span className={`value ${startingBalance >= 0 ? "success" : "danger"}`}>
+                    {formatUSD(startingBalance)}
+                  </span>
                 </div>
               </div>
               <div className="stat">
@@ -538,11 +557,11 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
-                <div className="stat">
+                <div className="stat stat-set-aside">
                   <div className="stat-inner">
-                    <span className="label">Balance</span>
-                    <span className={`value ${balance >= 0 ? "success" : "danger"}`}>
-                      {formatUSD(balance)}
+                    <span className="label">Ending Balance</span>
+                    <span className={`value ${endingBalance >= 0 ? "success" : "danger"}`}>
+                      {formatUSD(endingBalance)}
                     </span>
                   </div>
                 </div>

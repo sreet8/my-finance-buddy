@@ -489,6 +489,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border: 1px solid var(--border);
 }
 .income-banner .value { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.income-edit { display: flex; flex-direction: column; gap: 0.3rem; }
+.income-input-wrap { position: relative; display: inline-flex; align-items: center; }
+.income-currency {
+  position: absolute;
+  left: 0.6rem;
+  color: var(--muted);
+  pointer-events: none;
+  font-weight: 600;
+}
+.income-input-wrap input {
+  width: 10rem;
+  padding-left: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 
 .category-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
 .category-row {

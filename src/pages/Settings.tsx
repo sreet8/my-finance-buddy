@@ -4,7 +4,8 @@ import { useCategories } from "../context/CategoriesContext";
 import { getCategoryUsage } from "../lib/categories";
 import { supabase } from "../lib/supabase";
 import { Budget } from "../types";
-import { formatMonthYear, formatUSD, monthRange } from "../lib/format";
+import { formatMonthYear, formatUSD } from "../lib/format";
+import { fetchStartingBalance } from "../lib/periods";
 
 type DraftMap = Record<string, string>;
 
@@ -38,15 +39,16 @@ export default function Settings() {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
-  const { start, end } = useMemo(() => monthRange(year, month), [year, month]);
 
   const [loading, setLoading] = useState(true);
   const budgetsLoadedOnce = useRef(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
-  const [monthIncome, setMonthIncome] = useState(0);
+  const [incomeDraft, setIncomeDraft] = useState("0");
   const [draft, setDraft] = useState<DraftMap>({});
+
+  const incomeValue = Number(incomeDraft) || 0;
 
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
   const [newName, setNewName] = useState("");
@@ -71,17 +73,18 @@ export default function Settings() {
     const background = options?.background ?? false;
     if (!background) setLoading(true);
     setError(null);
-    const [budgetsRes, incomeRes] = await Promise.all([
+    const [budgetsRes, incomeRes, starting] = await Promise.all([
       supabase.from("budgets").select("*").eq("year", year).eq("month", month),
       supabase
-        .from("transactions")
+        .from("monthly_income")
         .select("amount")
-        .eq("kind", "income")
-        .gte("occurred_on", start)
-        .lte("occurred_on", end),
+        .eq("year", year)
+        .eq("month", month)
+        .maybeSingle(),
+      fetchStartingBalance({ year, month }),
     ]);
-    if (budgetsRes.error || incomeRes.error) {
-      setError(budgetsRes.error?.message ?? incomeRes.error?.message ?? "Load failed");
+    if (budgetsRes.error) {
+      setError(budgetsRes.error.message);
       if (!background) setLoading(false);
       return;
     }
@@ -93,8 +96,10 @@ export default function Settings() {
       }
     }
     setDraft(next);
-    setMonthIncome(
-      (incomeRes.data ?? []).reduce((s: number, r: { amount: number }) => s + Number(r.amount), 0)
+    // Default to the month's starting balance (last month's ending balance)
+    // until an income has been explicitly saved for this month.
+    setIncomeDraft(
+      String(incomeRes.data ? Number(incomeRes.data.amount) : starting)
     );
     budgetsLoadedOnce.current = true;
     if (!background) setLoading(false);
@@ -122,16 +127,22 @@ export default function Settings() {
       category: c,
       percent: Math.min(100, Math.max(0, Number(draft[c]) || 0)),
     }));
-    const { error: saveErr } = await supabase
-      .from("budgets")
-      .upsert(rows, { onConflict: "year,month,category" });
+    const [budgetRes, incomeRes] = await Promise.all([
+      supabase.from("budgets").upsert(rows, { onConflict: "year,month,category" }),
+      supabase
+        .from("monthly_income")
+        .upsert({ year, month, amount: incomeValue }, { onConflict: "year,month" }),
+    ]);
     setSaving(false);
-    if (saveErr) setError(saveErr.message);
-    else setSavedAt(new Date());
+    if (budgetRes.error || incomeRes.error) {
+      setError(budgetRes.error?.message ?? incomeRes.error?.message ?? "Save failed");
+    } else {
+      setSavedAt(new Date());
+    }
   }
 
   function estimatedDollars(percentStr: string): number {
-    return (Number(percentStr) || 0) * monthIncome / 100;
+    return (Number(percentStr) || 0) * incomeValue / 100;
   }
 
   async function handleAddCategory(e: React.FormEvent) {
@@ -308,14 +319,35 @@ export default function Settings() {
 
       <section className="card">
         <div className="income-banner">
-          <div>
-            <div className="muted" style={{ fontSize: "0.85rem" }}>
+          <div className="income-edit">
+            <label
+              className="muted"
+              htmlFor="month-income"
+              style={{ fontSize: "0.85rem" }}
+            >
               This month's income
+            </label>
+            <div className="income-input-wrap">
+              <span className="income-currency">$</span>
+              <input
+                id="month-income"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={incomeDraft}
+                onChange={(e) => setIncomeDraft(e.target.value)}
+                onBlur={() =>
+                  setIncomeDraft((v) =>
+                    v === "" ? "0" : String(Math.max(0, Number(v) || 0))
+                  )
+                }
+              />
             </div>
-            <div className="value">{formatUSD(monthIncome)}</div>
           </div>
           <div className="muted" style={{ textAlign: "right", maxWidth: 280 }}>
-            Budget is a % of income. Add income entries on the Dashboard to change this.
+            Set the income to budget against this month. It resets each month and
+            saves together with your budget.
           </div>
         </div>
 
@@ -375,7 +407,7 @@ export default function Settings() {
               <div className="budget-alloc">
                 <span className="budget-alloc-spacer" aria-hidden />
                 <strong className="budget-dollar">
-                  {formatUSD(totalPercent * monthIncome / 100)}
+                  {formatUSD(totalPercent * incomeValue / 100)}
                 </strong>
               </div>
             </div>
