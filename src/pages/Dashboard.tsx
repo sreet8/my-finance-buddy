@@ -205,6 +205,7 @@ export default function Dashboard() {
   const [budgetIncome, setBudgetIncome] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activityExpanded, setActivityExpanded] = useState(false);
 
   const [entry, setEntry] = useState<NewEntry>({
     kind: "expense",
@@ -278,6 +279,15 @@ export default function Dashboard() {
     if (!categoriesLoading && names.length > 0) loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey, categoriesLoading, names.join("|")]);
+
+  useEffect(() => {
+    if (!activityExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActivityExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activityExpanded]);
 
   const spentByCategory = useMemo(() => {
     const out = zeroMap(expenseNames);
@@ -429,6 +439,44 @@ export default function Dashboard() {
 
   const pageLoading = categoriesLoading || loading;
 
+  function renderActivityList() {
+    if (recentTransactions.length === 0) {
+      return <p className="muted">No entries for {formatMonthYear(year, month)}.</p>;
+    }
+    return (
+      <div className="tx-list">
+        {recentTransactions.map((t) => {
+          const setAside =
+            t.kind === "expense" && t.category && isSetAsideCategory(t.category);
+          const amtClass =
+            t.kind === "income" ? "income" : setAside ? "set_aside" : "expense";
+          return (
+            <div className="tx-row" key={t.id}>
+              <span className="date">{t.occurred_on}</span>
+              <span className="tx-label">
+                <span className="tx-category">
+                  {t.kind === "income" ? "Income" : t.category}
+                </span>
+                {t.note ? <span className="tx-note"> · {t.note}</span> : null}
+              </span>
+              <span className={`amt ${amtClass}`}>
+                {t.kind === "income" ? "+" : "−"}
+                {formatUSD(Number(t.amount))}
+              </span>
+              <button
+                className="del"
+                aria-label="delete"
+                onClick={() => deleteTransaction(t.id)}
+              >
+                ✕
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="page-title">
@@ -569,42 +617,18 @@ export default function Dashboard() {
             </section>
 
             <section className="card recent-activity-card">
-              <h2>Recent Activity</h2>
+              <button
+                type="button"
+                className="recent-activity-title"
+                onClick={() => setActivityExpanded(true)}
+                title="Expand Recent Activity"
+                aria-haspopup="dialog"
+              >
+                <span>Recent Activity</span>
+                <span className="expand-hint" aria-hidden="true">⤢</span>
+              </button>
               <div className="recent-activity-body">
-              {recentTransactions.length === 0 ? (
-                <p className="muted">No entries for {formatMonthYear(year, month)}.</p>
-              ) : (
-                <div className="tx-list">
-                  {recentTransactions.map((t) => {
-                    const setAside =
-                      t.kind === "expense" && t.category && isSetAsideCategory(t.category);
-                    const amtClass =
-                      t.kind === "income" ? "income" : setAside ? "set_aside" : "expense";
-                    return (
-                      <div className="tx-row" key={t.id}>
-                        <span className="date">{t.occurred_on}</span>
-                        <span className="tx-label">
-                          <span className="tx-category">
-                            {t.kind === "income" ? "Income" : t.category}
-                          </span>
-                          {t.note ? <span className="tx-note"> · {t.note}</span> : null}
-                        </span>
-                        <span className={`amt ${amtClass}`}>
-                          {t.kind === "income" ? "+" : "−"}
-                          {formatUSD(Number(t.amount))}
-                        </span>
-                        <button
-                          className="del"
-                          aria-label="delete"
-                          onClick={() => deleteTransaction(t.id)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                {renderActivityList()}
               </div>
             </section>
           </div>
@@ -689,6 +713,36 @@ export default function Dashboard() {
             />
             {error && <div className="error">{error}</div>}
           </section>
+        </div>
+      )}
+
+      {activityExpanded && (
+        <div
+          className="activity-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Recent Activity"
+          onClick={() => setActivityExpanded(false)}
+        >
+          <div
+            className="activity-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="activity-modal-header">
+              <h2>Recent Activity</h2>
+              <button
+                type="button"
+                className="activity-close"
+                aria-label="Close"
+                onClick={() => setActivityExpanded(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="activity-modal-body">
+              {renderActivityList()}
+            </div>
+          </div>
         </div>
       )}
     </div>
