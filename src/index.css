@@ -420,8 +420,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 400;
   color: var(--muted);
 }
-.tx-row .del { background: transparent; color: var(--muted); border: 0; padding: 0.2rem 0.4rem; }
+.tx-actions { display: inline-flex; align-items: center; gap: 0.1rem; }
+.tx-row .del,
+.tx-row .edit { background: transparent; color: var(--muted); border: 0; padding: 0.2rem 0.4rem; line-height: 1; }
 .tx-row .del:hover { color: var(--danger); background: transparent; }
+.tx-row .edit:hover { color: var(--text); background: transparent; }
+.tx-tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  color: #fff;
+  background: #3d95ce;
+}
+.venmo-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.venmo-check input { width: auto; margin: 0; }
+.entry-submit { display: flex; align-items: center; gap: 0.6rem; }
+.entry-submit button { flex-shrink: 0; }
+
+.edit-modal { max-width: 460px; }
+.edit-form { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem 1.25rem 1.25rem; }
+.edit-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.edit-field > span { font-size: 0.8rem; color: var(--muted); }
+.edit-venmo { margin-top: 0.15rem; }
+.edit-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.4rem; }
+.btn-secondary { background: var(--panel-2); color: var(--text); }
 
 .budget-table { display: flex; flex-direction: column; gap: 0.5rem; }
 .budget-row {

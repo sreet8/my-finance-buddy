@@ -35,6 +35,7 @@ type NewEntry = {
   category: string;
   note: string;
   date: string;
+  venmoZelle: boolean;
 };
 
 function todayISO(): string {
@@ -213,8 +214,11 @@ export default function Dashboard() {
     category: "",
     note: "",
     date: todayISO(),
+    venmoZelle: false,
   });
   const [submitting, setSubmitting] = useState(false);
+  const [editing, setEditing] = useState<(NewEntry & { id: string }) | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   useEffect(() => {
     if (entry.kind === "expense" && expenseNames.length > 0 && !expenseNames.includes(entry.category)) {
@@ -288,6 +292,15 @@ export default function Dashboard() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [activityExpanded]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEditing(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing]);
 
   const spentByCategory = useMemo(() => {
     const out = zeroMap(expenseNames);
@@ -420,6 +433,7 @@ export default function Dashboard() {
             category: entry.category,
             note: entry.note || null,
             occurred_on: entry.date,
+            venmo_zelle: entry.kind === "expense" ? entry.venmoZelle : false,
           });
 
     setSubmitting(false);
@@ -427,7 +441,70 @@ export default function Dashboard() {
       setError(res.error.message);
       return;
     }
-    setEntry((p) => ({ ...p, amount: "", note: "" }));
+    setEntry((p) => ({ ...p, amount: "", note: "", venmoZelle: false }));
+    await loadAll();
+  }
+
+  function beginEdit(t: Transaction) {
+    const uiKind: EntryKind =
+      t.kind === "income"
+        ? "income"
+        : t.category && isSetAsideCategory(t.category)
+          ? "set_aside"
+          : "expense";
+    setEditing({
+      id: t.id,
+      kind: uiKind,
+      amount: String(t.amount),
+      category: t.category ?? "",
+      note: t.note ?? "",
+      date: t.occurred_on,
+      venmoZelle: Boolean(t.venmo_zelle),
+    });
+    setError(null);
+  }
+
+  async function submitEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    const amt = Number(editing.amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setError("Amount must be greater than 0");
+      return;
+    }
+    setEditSubmitting(true);
+    setError(null);
+
+    const patch =
+      editing.kind === "income"
+        ? {
+            kind: "income" as const,
+            amount: amt,
+            category: null,
+            note: editing.note || null,
+            occurred_on: editing.date,
+            venmo_zelle: false,
+          }
+        : {
+            kind: "expense" as const,
+            amount: amt,
+            category: editing.category,
+            note: editing.note || null,
+            occurred_on: editing.date,
+            venmo_zelle: editing.kind === "expense" ? editing.venmoZelle : false,
+          };
+
+    const res = await supabase
+      .from("transactions")
+      .update(patch)
+      .eq("id", editing.id);
+
+    setEditSubmitting(false);
+    if (res.error) {
+      setError(res.error.message);
+      return;
+    }
+    setEditing(null);
     await loadAll();
   }
 
@@ -457,19 +534,32 @@ export default function Dashboard() {
                 <span className="tx-category">
                   {t.kind === "income" ? "Income" : t.category}
                 </span>
+                {t.venmo_zelle ? (
+                  <span className="tx-tag">Venmo/Zelle</span>
+                ) : null}
                 {t.note ? <span className="tx-note"> · {t.note}</span> : null}
               </span>
               <span className={`amt ${amtClass}`}>
                 {t.kind === "income" ? "+" : "−"}
                 {formatUSD(Number(t.amount))}
               </span>
-              <button
-                className="del"
-                aria-label="delete"
-                onClick={() => deleteTransaction(t.id)}
-              >
-                ✕
-              </button>
+              <span className="tx-actions">
+                <button
+                  className="edit"
+                  aria-label="edit"
+                  title="Edit"
+                  onClick={() => beginEdit(t)}
+                >
+                  ✎
+                </button>
+                <button
+                  className="del"
+                  aria-label="delete"
+                  onClick={() => deleteTransaction(t.id)}
+                >
+                  ✕
+                </button>
+              </span>
             </div>
           );
         })}
@@ -699,9 +789,23 @@ export default function Dashboard() {
                 value={entry.note}
                 onChange={(e) => setEntry((p) => ({ ...p, note: e.target.value }))}
               />
-              <button type="submit" disabled={submitting}>
-                {submitting ? "Adding…" : "Add"}
-              </button>
+              <div className="entry-submit">
+                {entry.kind === "expense" ? (
+                  <label className="venmo-check">
+                    <input
+                      type="checkbox"
+                      checked={entry.venmoZelle}
+                      onChange={(e) =>
+                        setEntry((p) => ({ ...p, venmoZelle: e.target.checked }))
+                      }
+                    />
+                    Venmo/Zelle
+                  </label>
+                ) : null}
+                <button type="submit" disabled={submitting}>
+                  {submitting ? "Adding…" : "Add"}
+                </button>
+              </div>
             </form>
             <div className="spacer" />
             <input
@@ -742,6 +846,152 @@ export default function Dashboard() {
             <div className="activity-modal-body">
               {renderActivityList()}
             </div>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div
+          className="activity-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit Entry"
+          onClick={() => setEditing(null)}
+        >
+          <div
+            className="activity-modal edit-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="activity-modal-header">
+              <h2>Edit Entry</h2>
+              <button
+                type="button"
+                className="activity-close"
+                aria-label="Close"
+                onClick={() => setEditing(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <form className="edit-form" onSubmit={submitEdit}>
+              <label className="edit-field">
+                <span>Type</span>
+                <select
+                  value={editing.kind}
+                  onChange={(e) => {
+                    const kind = e.target.value as EntryKind;
+                    setEditing((p) =>
+                      p
+                        ? {
+                            ...p,
+                            kind,
+                            category:
+                              kind === "expense"
+                                ? expenseNames.includes(p.category)
+                                  ? p.category
+                                  : expenseNames[0] ?? ""
+                                : kind === "set_aside"
+                                  ? setAsideNames.includes(p.category)
+                                    ? p.category
+                                    : setAsideNames[0] ?? ""
+                                  : p.category,
+                          }
+                        : p
+                    );
+                  }}
+                >
+                  <option value="expense">Expense</option>
+                  <option value="income">Income</option>
+                  {setAsideNames.length > 0 && (
+                    <option value="set_aside">Savings & Investments</option>
+                  )}
+                </select>
+              </label>
+              <label className="edit-field">
+                <span>Amount</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={editing.amount}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, amount: e.target.value } : p))
+                  }
+                  required
+                />
+              </label>
+              {editing.kind === "expense" || editing.kind === "set_aside" ? (
+                <label className="edit-field">
+                  <span>Category</span>
+                  <select
+                    value={editing.category}
+                    onChange={(e) =>
+                      setEditing((p) =>
+                        p ? { ...p, category: e.target.value } : p
+                      )
+                    }
+                  >
+                    {(editing.kind === "expense" ? expenseNames : setAsideNames).map(
+                      (c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+              ) : null}
+              <label className="edit-field">
+                <span>Note</span>
+                <input
+                  type="text"
+                  placeholder="Note (optional)"
+                  value={editing.note}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, note: e.target.value } : p))
+                  }
+                />
+              </label>
+              <label className="edit-field">
+                <span>Date</span>
+                <input
+                  type="date"
+                  min={start}
+                  max={maxEntryDate}
+                  value={editing.date}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, date: e.target.value } : p))
+                  }
+                />
+              </label>
+              {editing.kind === "expense" ? (
+                <label className="venmo-check edit-venmo">
+                  <input
+                    type="checkbox"
+                    checked={editing.venmoZelle}
+                    onChange={(e) =>
+                      setEditing((p) =>
+                        p ? { ...p, venmoZelle: e.target.checked } : p
+                      )
+                    }
+                  />
+                  Venmo/Zelle
+                </label>
+              ) : null}
+              <div className="edit-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setEditing(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={editSubmitting}>
+                  {editSubmitting ? "Saving…" : "Save"}
+                </button>
+              </div>
+              {error && <div className="error">{error}</div>}
+            </form>
           </div>
         </div>
       )}
