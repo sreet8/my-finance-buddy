@@ -36,7 +36,6 @@ type NewEntry = {
   title: string;
   description: string;
   date: string;
-  venmoZelle: boolean;
 };
 
 function todayISO(): string {
@@ -228,7 +227,6 @@ export default function Dashboard() {
     title: "",
     description: "",
     date: todayISO(),
-    venmoZelle: false,
   });
   const [submitting, setSubmitting] = useState(false);
   const [editing, setEditing] = useState<(NewEntry & { id: string }) | null>(null);
@@ -436,7 +434,6 @@ export default function Dashboard() {
       title: entry.title.trim(),
       description: entry.description.trim() || null,
       occurred_on: entry.date,
-      venmo_zelle: entry.kind === "expense" ? entry.venmoZelle : false,
     });
 
     setSubmitting(false);
@@ -449,7 +446,6 @@ export default function Dashboard() {
       amount: "",
       title: "",
       description: "",
-      venmoZelle: false,
     }));
     await loadAll();
   }
@@ -469,7 +465,6 @@ export default function Dashboard() {
       title: t.title ?? "",
       description: t.description ?? "",
       date: t.occurred_on,
-      venmoZelle: Boolean(t.venmo_zelle),
     });
     setError(null);
   }
@@ -498,7 +493,6 @@ export default function Dashboard() {
         title: editing.title.trim(),
         description: editing.description.trim() || null,
         occurred_on: editing.date,
-        venmo_zelle: editing.kind === "expense" ? editing.venmoZelle : false,
       })
       .eq("id", editing.id);
 
@@ -580,9 +574,6 @@ export default function Dashboard() {
               <span className="tx-label tx-label-full">
                 {t.title ? <span className="tx-title">{t.title}</span> : null}
                 <span className="tx-category">{categoryLabel}</span>
-                {t.venmo_zelle ? (
-                  <span className="tx-tag">Venmo/Zelle</span>
-                ) : null}
                 {t.description ? (
                   <span className="tx-note tx-note-truncate">{t.description}</span>
                 ) : null}
@@ -859,18 +850,6 @@ export default function Dashboard() {
                 />
               </label>
               <div className="entry-controls">
-                {entry.kind === "expense" ? (
-                  <label className="venmo-check">
-                    <input
-                      type="checkbox"
-                      checked={entry.venmoZelle}
-                      onChange={(e) =>
-                        setEntry((p) => ({ ...p, venmoZelle: e.target.checked }))
-                      }
-                    />
-                    Venmo/Zelle
-                  </label>
-                ) : null}
                 <button type="submit" disabled={submitting}>
                   {submitting ? "Adding…" : "Add Entry"}
                 </button>
@@ -1033,20 +1012,6 @@ export default function Dashboard() {
                   }
                 />
               </label>
-              {editing.kind === "expense" ? (
-                <label className="venmo-check edit-venmo">
-                  <input
-                    type="checkbox"
-                    checked={editing.venmoZelle}
-                    onChange={(e) =>
-                      setEditing((p) =>
-                        p ? { ...p, venmoZelle: e.target.checked } : p
-                      )
-                    }
-                  />
-                  Venmo/Zelle
-                </label>
-              ) : null}
               <div className="edit-actions">
                 <button
                   type="button"
