@@ -4,17 +4,25 @@ create table if not exists public.categories (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   color text not null default '#c9a98b',
-  sort_order int not null default 0
+  sort_order int not null default 0,
+  type text not null default 'expense' check (type in ('expense', 'income', 'savings'))
 );
 
-insert into public.categories (name, color, sort_order) values
-  ('Housing', '#c4a7cc', 0),
-  ('Food', '#f5b88f', 1),
-  ('Transport', '#a8c9a6', 2),
-  ('Utilities', '#b8a5cc', 3),
-  ('Entertainment', '#eeb0c0', 4),
-  ('Shopping', '#a5c2d0', 5),
-  ('Other', '#c9a98b', 6)
+insert into public.categories (name, color, sort_order, type) values
+  ('Housing', '#c4a7cc', 0, 'expense'),
+  ('Food', '#f5b88f', 1, 'expense'),
+  ('Transport', '#a8c9a6', 2, 'expense'),
+  ('Utilities', '#b8a5cc', 3, 'expense'),
+  ('Entertainment', '#eeb0c0', 4, 'expense'),
+  ('Shopping', '#a5c2d0', 5, 'expense'),
+  ('Other', '#c9a98b', 6, 'expense'),
+  ('Direct Deposit', '#9ec5a8', 0, 'income'),
+  ('Zelle', '#8bb7e0', 1, 'income'),
+  ('Venmo Transfer', '#7fa8d8', 2, 'income'),
+  ('Other Income', '#c9b8a0', 3, 'income'),
+  ('Schwab Individual', '#a8c6d8', 0, 'savings'),
+  ('Schwab Roth', '#c4b0d8', 1, 'savings'),
+  ('Apple Savings', '#b8bcc4', 2, 'savings')
 on conflict (name) do nothing;
 
 create table if not exists public.budgets (
@@ -31,8 +39,11 @@ create table if not exists public.transactions (
   kind text not null check (kind in ('income', 'expense')),
   amount numeric not null check (amount > 0),
   category text,
+  title text,
+  description text,
   note text,
   occurred_on date not null,
+  venmo_zelle boolean not null default false,
   created_at timestamptz not null default now()
 );
 

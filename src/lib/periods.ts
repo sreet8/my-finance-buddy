@@ -45,6 +45,56 @@ export function periodKey(p: Period): string {
   return `${p.year}-${String(p.month).padStart(2, "0")}`;
 }
 
+function isBefore(a: Period, b: Period): boolean {
+  return a.year < b.year || (a.year === b.year && a.month < b.month);
+}
+
+/**
+ * Budget percentages in effect for a period. If the period has its own saved
+ * budget rows, those are used. Otherwise the most recent prior month's budget
+ * rolls over, so allocations carry forward instead of resetting to zero each
+ * month. `rolledOverFrom` names the source month when a rollover was applied.
+ */
+export async function fetchEffectiveBudgets(period: Period): Promise<{
+  percentByCategory: Record<string, number>;
+  rolledOverFrom: Period | null;
+}> {
+  const { data, error } = await supabase
+    .from("budgets")
+    .select("year, month, category, percent");
+  if (error || !data) return { percentByCategory: {}, rolledOverFrom: null };
+
+  const byPeriod = new Map<
+    string,
+    { period: Period; rows: { category: string; percent: number }[] }
+  >();
+  for (const r of data) {
+    const p = { year: Number(r.year), month: Number(r.month) };
+    const key = periodKey(p);
+    if (!byPeriod.has(key)) byPeriod.set(key, { period: p, rows: [] });
+    byPeriod.get(key)!.rows.push({
+      category: r.category as string,
+      percent: Number(r.percent),
+    });
+  }
+
+  const target = byPeriod.get(periodKey(period));
+  const source =
+    target ??
+    [...byPeriod.values()]
+      .filter((e) => isBefore(e.period, period))
+      .sort((a, b) => (isBefore(a.period, b.period) ? 1 : -1))[0] ??
+    null;
+
+  const percentByCategory: Record<string, number> = {};
+  for (const row of source?.rows ?? []) percentByCategory[row.category] = row.percent;
+
+  return {
+    percentByCategory,
+    rolledOverFrom: !target && source ? source.period : null,
+  };
+}
+
 export function parsePeriodKey(key: string): Period {
   const [y, m] = key.split("-");
   return { year: Number(y), month: Number(m) };

@@ -8,9 +8,8 @@ import {
   type TooltipProps,
 } from "recharts";
 import { useCategories } from "../context/CategoriesContext";
-import { isSetAsideCategory } from "../lib/categories";
 import { supabase } from "../lib/supabase";
-import { Budget, Transaction, UNUSED_COLOR } from "../types";
+import { Transaction, UNUSED_COLOR } from "../types";
 import {
   formatMonthYear,
   formatUSD,
@@ -20,6 +19,7 @@ import {
 import {
   currentPeriod,
   fetchAvailablePeriods,
+  fetchEffectiveBudgets,
   fetchStartingBalance,
   formatPeriodLabel,
   parsePeriodKey,
@@ -33,7 +33,8 @@ type NewEntry = {
   kind: EntryKind;
   amount: string;
   category: string;
-  note: string;
+  title: string;
+  description: string;
   date: string;
   venmoZelle: boolean;
 };
@@ -177,17 +178,29 @@ function PieTooltip({
   );
 }
 
-export default function Dashboard() {
-  const { names, colors, loading: categoriesLoading } = useCategories();
+/** The editable categories available for a given entry type. */
+function categoriesForKind(
+  kind: EntryKind,
+  expenseNames: string[],
+  incomeNames: string[],
+  savingsNames: string[]
+): string[] {
+  if (kind === "income") return incomeNames;
+  if (kind === "set_aside") return savingsNames;
+  return expenseNames;
+}
 
-  const expenseNames = useMemo(
-    () => names.filter((n) => !isSetAsideCategory(n)),
-    [names]
-  );
-  const setAsideNames = useMemo(
-    () => names.filter((n) => isSetAsideCategory(n)),
-    [names]
-  );
+export default function Dashboard() {
+  const {
+    expenseNames,
+    incomeNames,
+    savingsNames,
+    typeByName,
+    colors,
+    loading: categoriesLoading,
+  } = useCategories();
+
+  const setAsideNames = savingsNames;
 
   const [selectedKey, setSelectedKey] = useState(() => periodKey(currentPeriod()));
   const [availablePeriods, setAvailablePeriods] = useState<Period[]>(() => [currentPeriod()]);
@@ -200,7 +213,7 @@ export default function Dashboard() {
     [year, month]
   );
 
-  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [budgetPercents, setBudgetPercents] = useState<Record<string, number>>({});
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [startingBalance, setStartingBalance] = useState(0);
   const [budgetIncome, setBudgetIncome] = useState(0);
@@ -212,7 +225,8 @@ export default function Dashboard() {
     kind: "expense",
     amount: "",
     category: "",
-    note: "",
+    title: "",
+    description: "",
     date: todayISO(),
     venmoZelle: false,
   });
@@ -220,14 +234,20 @@ export default function Dashboard() {
   const [editing, setEditing] = useState<(NewEntry & { id: string }) | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
+  const namesReady =
+    expenseNames.length + incomeNames.length + savingsNames.length > 0;
+
   useEffect(() => {
-    if (entry.kind === "expense" && expenseNames.length > 0 && !expenseNames.includes(entry.category)) {
-      setEntry((p) => ({ ...p, category: expenseNames[0] }));
+    const list = categoriesForKind(
+      entry.kind,
+      expenseNames,
+      incomeNames,
+      savingsNames
+    );
+    if (list.length > 0 && !list.includes(entry.category)) {
+      setEntry((p) => ({ ...p, category: list[0] }));
     }
-    if (entry.kind === "set_aside" && setAsideNames.length > 0 && !setAsideNames.includes(entry.category)) {
-      setEntry((p) => ({ ...p, category: setAsideNames[0] }));
-    }
-  }, [expenseNames, setAsideNames, entry.kind, entry.category]);
+  }, [expenseNames, incomeNames, savingsNames, entry.kind, entry.category]);
 
   useEffect(() => {
     setEntry((p) => {
@@ -248,8 +268,8 @@ export default function Dashboard() {
   async function loadAll() {
     setLoading(true);
     setError(null);
-    const [b, t, starting, inc] = await Promise.all([
-      supabase.from("budgets").select("*").eq("year", year).eq("month", month),
+    const [effective, t, starting, inc] = await Promise.all([
+      fetchEffectiveBudgets({ year, month }),
       supabase
         .from("transactions")
         .select("*")
@@ -265,12 +285,12 @@ export default function Dashboard() {
         .eq("month", month)
         .maybeSingle(),
     ]);
-    if (b.error || t.error) {
-      setError(b.error?.message ?? t.error?.message ?? "Load failed");
+    if (t.error) {
+      setError(t.error.message ?? "Load failed");
       setLoading(false);
       return;
     }
-    setBudgets((b.data ?? []) as Budget[]);
+    setBudgetPercents(effective.percentByCategory);
     setTransactions((t.data ?? []) as Transaction[]);
     setStartingBalance(starting);
     // Budget income defaults to the month's starting balance until explicitly set.
@@ -280,9 +300,9 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    if (!categoriesLoading && names.length > 0) loadAll();
+    if (!categoriesLoading && namesReady) loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey, categoriesLoading, names.join("|")]);
+  }, [selectedKey, categoriesLoading, namesReady]);
 
   useEffect(() => {
     if (!activityExpanded) return;
@@ -305,27 +325,22 @@ export default function Dashboard() {
   const spentByCategory = useMemo(() => {
     const out = zeroMap(expenseNames);
     for (const t of transactions) {
-      if (
-        t.kind === "expense" &&
-        t.category &&
-        t.category in out &&
-        !isSetAsideCategory(t.category)
-      ) {
+      if (t.kind === "expense" && t.category && t.category in out) {
         out[t.category] += Number(t.amount);
       }
     }
     return out;
   }, [transactions, expenseNames]);
 
-  const allSpentByCategory = useMemo(() => {
-    const out = zeroMap(names);
+  const savingsSpentByCategory = useMemo(() => {
+    const out = zeroMap(savingsNames);
     for (const t of transactions) {
       if (t.kind === "expense" && t.category && t.category in out) {
         out[t.category] += Number(t.amount);
       }
     }
     return out;
-  }, [transactions, names]);
+  }, [transactions, savingsNames]);
 
   const monthIncomeTx = useMemo(
     () => transactions.filter((t) => t.kind === "income").reduce((s, t) => s + Number(t.amount), 0),
@@ -344,33 +359,21 @@ export default function Dashboard() {
     [startingBalance, monthIncomeTx, monthExpenseTotal]
   );
 
-  const percentByCategory = useMemo(() => {
-    const out = zeroMap(expenseNames);
-    for (const b of budgets) {
-      if (b.category in out) out[b.category] = Number(b.percent);
-    }
-    return out;
-  }, [budgets, expenseNames]);
-
   const budgetByCategory = useMemo(() => {
     const out = zeroMap(expenseNames);
-    for (const c of expenseNames) out[c] = (percentByCategory[c] / 100) * budgetIncome;
-    return out;
-  }, [percentByCategory, budgetIncome, expenseNames]);
-
-  const percentByCategoryAll = useMemo(() => {
-    const out = zeroMap(names);
-    for (const b of budgets) {
-      if (b.category in out) out[b.category] = Number(b.percent);
+    for (const c of expenseNames) {
+      out[c] = ((Number(budgetPercents[c]) || 0) / 100) * budgetIncome;
     }
     return out;
-  }, [budgets, names]);
+  }, [budgetPercents, budgetIncome, expenseNames]);
 
-  const budgetByCategoryAll = useMemo(() => {
-    const out = zeroMap(names);
-    for (const c of names) out[c] = (percentByCategoryAll[c] / 100) * budgetIncome;
+  const savingsBudgetByCategory = useMemo(() => {
+    const out = zeroMap(savingsNames);
+    for (const c of savingsNames) {
+      out[c] = ((Number(budgetPercents[c]) || 0) / 100) * budgetIncome;
+    }
     return out;
-  }, [percentByCategoryAll, budgetIncome, names]);
+  }, [budgetPercents, budgetIncome, savingsNames]);
 
   const totalBudget = useMemo(
     () => expenseNames.reduce((s, c) => s + budgetByCategory[c], 0),
@@ -382,8 +385,8 @@ export default function Dashboard() {
   );
 
   const totalSetAside = useMemo(
-    () => setAsideNames.reduce((s, c) => s + allSpentByCategory[c], 0),
-    [allSpentByCategory, setAsideNames]
+    () => setAsideNames.reduce((s, c) => s + savingsSpentByCategory[c], 0),
+    [savingsSpentByCategory, setAsideNames]
   );
 
   const overBudget = totalSpent > totalBudget && totalBudget > 0;
@@ -405,43 +408,49 @@ export default function Dashboard() {
       setError("Amount must be greater than 0");
       return;
     }
-    if (entry.kind === "expense" && expenseNames.length === 0) {
-      setError("Add at least one expense category in Settings");
+    if (!entry.title.trim()) {
+      setError("Entry title is required");
       return;
     }
-    if (entry.kind === "set_aside" && setAsideNames.length === 0) {
-      setError(
-        'Add a category whose name includes "Savings" or "Investment" in Settings'
-      );
+    const list = categoriesForKind(
+      entry.kind,
+      expenseNames,
+      incomeNames,
+      savingsNames
+    );
+    if (list.length === 0) {
+      setError("Add at least one category for this entry type in Settings");
+      return;
+    }
+    if (!entry.category) {
+      setError("Choose a category");
       return;
     }
     setSubmitting(true);
     setError(null);
 
-    const res =
-      entry.kind === "income"
-        ? await supabase.from("transactions").insert({
-            kind: "income",
-            amount: amt,
-            category: null,
-            note: entry.note || null,
-            occurred_on: entry.date,
-          })
-        : await supabase.from("transactions").insert({
-            kind: "expense",
-            amount: amt,
-            category: entry.category,
-            note: entry.note || null,
-            occurred_on: entry.date,
-            venmo_zelle: entry.kind === "expense" ? entry.venmoZelle : false,
-          });
+    const res = await supabase.from("transactions").insert({
+      kind: entry.kind === "income" ? "income" : "expense",
+      amount: amt,
+      category: entry.category,
+      title: entry.title.trim(),
+      description: entry.description.trim() || null,
+      occurred_on: entry.date,
+      venmo_zelle: entry.kind === "expense" ? entry.venmoZelle : false,
+    });
 
     setSubmitting(false);
     if (res.error) {
       setError(res.error.message);
       return;
     }
-    setEntry((p) => ({ ...p, amount: "", note: "", venmoZelle: false }));
+    setEntry((p) => ({
+      ...p,
+      amount: "",
+      title: "",
+      description: "",
+      venmoZelle: false,
+    }));
     await loadAll();
   }
 
@@ -449,7 +458,7 @@ export default function Dashboard() {
     const uiKind: EntryKind =
       t.kind === "income"
         ? "income"
-        : t.category && isSetAsideCategory(t.category)
+        : t.category && typeByName[t.category] === "savings"
           ? "set_aside"
           : "expense";
     setEditing({
@@ -457,7 +466,8 @@ export default function Dashboard() {
       kind: uiKind,
       amount: String(t.amount),
       category: t.category ?? "",
-      note: t.note ?? "",
+      title: t.title ?? "",
+      description: t.description ?? "",
       date: t.occurred_on,
       venmoZelle: Boolean(t.venmo_zelle),
     });
@@ -472,31 +482,24 @@ export default function Dashboard() {
       setError("Amount must be greater than 0");
       return;
     }
+    if (!editing.title.trim()) {
+      setError("Entry title is required");
+      return;
+    }
     setEditSubmitting(true);
     setError(null);
 
-    const patch =
-      editing.kind === "income"
-        ? {
-            kind: "income" as const,
-            amount: amt,
-            category: null,
-            note: editing.note || null,
-            occurred_on: editing.date,
-            venmo_zelle: false,
-          }
-        : {
-            kind: "expense" as const,
-            amount: amt,
-            category: editing.category,
-            note: editing.note || null,
-            occurred_on: editing.date,
-            venmo_zelle: editing.kind === "expense" ? editing.venmoZelle : false,
-          };
-
     const res = await supabase
       .from("transactions")
-      .update(patch)
+      .update({
+        kind: editing.kind === "income" ? "income" : "expense",
+        amount: amt,
+        category: editing.category || null,
+        title: editing.title.trim(),
+        description: editing.description.trim() || null,
+        occurred_on: editing.date,
+        venmo_zelle: editing.kind === "expense" ? editing.venmoZelle : false,
+      })
       .eq("id", editing.id);
 
     setEditSubmitting(false);
@@ -516,28 +519,73 @@ export default function Dashboard() {
 
   const pageLoading = categoriesLoading || loading;
 
-  function renderActivityList() {
+  const entryCategories = categoriesForKind(
+    entry.kind,
+    expenseNames,
+    incomeNames,
+    savingsNames
+  );
+  const editCategories = editing
+    ? categoriesForKind(editing.kind, expenseNames, incomeNames, savingsNames)
+    : [];
+
+  function entryMeta(t: Transaction) {
+    const setAside =
+      t.kind === "expense" && t.category && typeByName[t.category] === "savings";
+    const amtClass =
+      t.kind === "income" ? "income" : setAside ? "set_aside" : "expense";
+    const categoryLabel =
+      t.category ?? (t.kind === "income" ? "Income" : "Uncategorized");
+    return { amtClass, categoryLabel };
+  }
+
+  // Collapsed view: date, entry type, and amount only — kept skinny so more
+  // entries are visible before expanding.
+  function renderCompactList() {
+    if (recentTransactions.length === 0) {
+      return <p className="muted">No entries for {formatMonthYear(year, month)}.</p>;
+    }
+    return (
+      <div className="tx-list tx-list-compact">
+        {recentTransactions.map((t) => {
+          const { amtClass, categoryLabel } = entryMeta(t);
+          return (
+            <div className="tx-row tx-row-compact" key={t.id}>
+              <span className="date">{t.occurred_on}</span>
+              <span className="tx-type">{categoryLabel}</span>
+              <span className={`amt ${amtClass}`}>
+                {t.kind === "income" ? "+" : "−"}
+                {formatUSD(Number(t.amount))}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Expanded view: every field. The description takes the remaining width and is
+  // truncated with an ellipsis before it would run into the amount.
+  function renderFullList() {
     if (recentTransactions.length === 0) {
       return <p className="muted">No entries for {formatMonthYear(year, month)}.</p>;
     }
     return (
       <div className="tx-list">
         {recentTransactions.map((t) => {
-          const setAside =
-            t.kind === "expense" && t.category && isSetAsideCategory(t.category);
-          const amtClass =
-            t.kind === "income" ? "income" : setAside ? "set_aside" : "expense";
+          const { amtClass, categoryLabel } = entryMeta(t);
           return (
             <div className="tx-row" key={t.id}>
               <span className="date">{t.occurred_on}</span>
-              <span className="tx-label">
-                <span className="tx-category">
-                  {t.kind === "income" ? "Income" : t.category}
-                </span>
+              <span className="tx-label tx-label-full">
+                {t.title ? <span className="tx-title">{t.title}</span> : null}
+                <span className="tx-category">{categoryLabel}</span>
                 {t.venmo_zelle ? (
                   <span className="tx-tag">Venmo/Zelle</span>
                 ) : null}
-                {t.note ? <span className="tx-note"> · {t.note}</span> : null}
+                {t.description ? (
+                  <span className="tx-note tx-note-truncate">{t.description}</span>
+                ) : null}
               </span>
               <span className={`amt ${amtClass}`}>
                 {t.kind === "income" ? "+" : "−"}
@@ -606,8 +654,8 @@ export default function Dashboard() {
                 <BudgetPieBlock
                   label="Savings & Investments"
                   categoryNames={setAsideNames}
-                  spentByCategory={allSpentByCategory}
-                  budgetByCategory={budgetByCategoryAll}
+                  spentByCategory={savingsSpentByCategory}
+                  budgetByCategory={savingsBudgetByCategory}
                   colors={colors}
                 />
               </div>
@@ -640,8 +688,8 @@ export default function Dashboard() {
                   <div className="legend">
                     <div className="legend-heading">Savings & Investments</div>
                     {setAsideNames.map((c) => {
-                      const spent = allSpentByCategory[c];
-                      const budget = budgetByCategoryAll[c];
+                      const spent = savingsSpentByCategory[c];
+                      const budget = savingsBudgetByCategory[c];
                       return (
                         <div className="legend-row" key={c}>
                           <span
@@ -718,7 +766,7 @@ export default function Dashboard() {
                 <span className="expand-hint" aria-hidden="true">⤢</span>
               </button>
               <div className="recent-activity-body">
-                {renderActivityList()}
+                {renderCompactList()}
               </div>
             </section>
           </div>
@@ -727,69 +775,90 @@ export default function Dashboard() {
           <section className="card grid-full">
             <h2>Add Entry</h2>
             <form className="entry-form" onSubmit={submitEntry}>
-              <select
-                value={entry.kind}
-                onChange={(e) => {
-                  const kind = e.target.value as EntryKind;
-                  setEntry((p) => ({
-                    ...p,
-                    kind,
-                    category:
-                      kind === "expense"
-                        ? expenseNames[0] ?? ""
-                        : kind === "set_aside"
-                          ? setAsideNames[0] ?? ""
-                          : p.category,
-                  }));
-                }}
-              >
-                <option value="expense">Expense</option>
-                <option value="income">Income</option>
-                {setAsideNames.length > 0 && (
-                  <option value="set_aside">Savings & Investments</option>
-                )}
-              </select>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="Amount"
-                value={entry.amount}
-                onChange={(e) => setEntry((p) => ({ ...p, amount: e.target.value }))}
-                required
-              />
-              {entry.kind === "expense" ? (
+              <label className="entry-field">
+                <span>Entry Type</span>
+                <select
+                  value={entry.kind}
+                  onChange={(e) => {
+                    const kind = e.target.value as EntryKind;
+                    const list = categoriesForKind(
+                      kind,
+                      expenseNames,
+                      incomeNames,
+                      savingsNames
+                    );
+                    setEntry((p) => ({ ...p, kind, category: list[0] ?? "" }));
+                  }}
+                >
+                  <option value="expense">Expense</option>
+                  <option value="income">Income</option>
+                  <option value="set_aside">Savings &amp; Investments</option>
+                </select>
+              </label>
+              <label className="entry-field">
+                <span>Category</span>
                 <select
                   value={entry.category}
                   onChange={(e) =>
                     setEntry((p) => ({ ...p, category: e.target.value }))
                   }
+                  disabled={entryCategories.length === 0}
                 >
-                  {expenseNames.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
+                  {entryCategories.length === 0 ? (
+                    <option value="">No categories — add in Settings</option>
+                  ) : (
+                    entryCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))
+                  )}
                 </select>
-              ) : entry.kind === "set_aside" ? (
-                <select
-                  value={entry.category}
+              </label>
+              <label className="entry-field">
+                <span>Amount</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="0.00"
+                  value={entry.amount}
+                  onChange={(e) => setEntry((p) => ({ ...p, amount: e.target.value }))}
+                  required
+                />
+              </label>
+              <label className="entry-field">
+                <span>Entry Title</span>
+                <input
+                  type="text"
+                  placeholder="Title"
+                  value={entry.title}
+                  onChange={(e) => setEntry((p) => ({ ...p, title: e.target.value }))}
+                  required
+                />
+              </label>
+              <label className="entry-field entry-field-desc">
+                <span>Description (optional)</span>
+                <input
+                  type="text"
+                  placeholder="Description"
+                  value={entry.description}
                   onChange={(e) =>
-                    setEntry((p) => ({ ...p, category: e.target.value }))
+                    setEntry((p) => ({ ...p, description: e.target.value }))
                   }
-                >
-                  {setAsideNames.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              ) : (
-                <input disabled placeholder="—" />
-              )}
-              <input
-                type="text"
-                placeholder="Note (optional)"
-                value={entry.note}
-                onChange={(e) => setEntry((p) => ({ ...p, note: e.target.value }))}
-              />
-              <div className="entry-submit">
+                />
+              </label>
+              <label className="entry-field">
+                <span>Date</span>
+                <input
+                  type="date"
+                  min={start}
+                  max={maxEntryDate}
+                  value={entry.date}
+                  onChange={(e) => setEntry((p) => ({ ...p, date: e.target.value }))}
+                />
+              </label>
+              <div className="entry-controls">
                 {entry.kind === "expense" ? (
                   <label className="venmo-check">
                     <input
@@ -803,18 +872,10 @@ export default function Dashboard() {
                   </label>
                 ) : null}
                 <button type="submit" disabled={submitting}>
-                  {submitting ? "Adding…" : "Add"}
+                  {submitting ? "Adding…" : "Add Entry"}
                 </button>
               </div>
             </form>
-            <div className="spacer" />
-            <input
-              type="date"
-              min={start}
-              max={maxEntryDate}
-              value={entry.date}
-              onChange={(e) => setEntry((p) => ({ ...p, date: e.target.value }))}
-            />
             {error && <div className="error">{error}</div>}
           </section>
         </div>
@@ -844,7 +905,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="activity-modal-body">
-              {renderActivityList()}
+              {renderFullList()}
             </div>
           </div>
         </div>
@@ -875,26 +936,25 @@ export default function Dashboard() {
             </div>
             <form className="edit-form" onSubmit={submitEdit}>
               <label className="edit-field">
-                <span>Type</span>
+                <span>Entry Type</span>
                 <select
                   value={editing.kind}
                   onChange={(e) => {
                     const kind = e.target.value as EntryKind;
+                    const list = categoriesForKind(
+                      kind,
+                      expenseNames,
+                      incomeNames,
+                      savingsNames
+                    );
                     setEditing((p) =>
                       p
                         ? {
                             ...p,
                             kind,
-                            category:
-                              kind === "expense"
-                                ? expenseNames.includes(p.category)
-                                  ? p.category
-                                  : expenseNames[0] ?? ""
-                                : kind === "set_aside"
-                                  ? setAsideNames.includes(p.category)
-                                    ? p.category
-                                    : setAsideNames[0] ?? ""
-                                  : p.category,
+                            category: list.includes(p.category)
+                              ? p.category
+                              : list[0] ?? "",
                           }
                         : p
                     );
@@ -902,8 +962,26 @@ export default function Dashboard() {
                 >
                   <option value="expense">Expense</option>
                   <option value="income">Income</option>
-                  {setAsideNames.length > 0 && (
-                    <option value="set_aside">Savings & Investments</option>
+                  <option value="set_aside">Savings &amp; Investments</option>
+                </select>
+              </label>
+              <label className="edit-field">
+                <span>Category</span>
+                <select
+                  value={editing.category}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, category: e.target.value } : p))
+                  }
+                  disabled={editCategories.length === 0}
+                >
+                  {editCategories.length === 0 ? (
+                    <option value="">No categories</option>
+                  ) : (
+                    editCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))
                   )}
                 </select>
               </label>
@@ -920,35 +998,26 @@ export default function Dashboard() {
                   required
                 />
               </label>
-              {editing.kind === "expense" || editing.kind === "set_aside" ? (
-                <label className="edit-field">
-                  <span>Category</span>
-                  <select
-                    value={editing.category}
-                    onChange={(e) =>
-                      setEditing((p) =>
-                        p ? { ...p, category: e.target.value } : p
-                      )
-                    }
-                  >
-                    {(editing.kind === "expense" ? expenseNames : setAsideNames).map(
-                      (c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      )
-                    )}
-                  </select>
-                </label>
-              ) : null}
               <label className="edit-field">
-                <span>Note</span>
+                <span>Entry Title</span>
                 <input
                   type="text"
-                  placeholder="Note (optional)"
-                  value={editing.note}
+                  placeholder="Title"
+                  value={editing.title}
                   onChange={(e) =>
-                    setEditing((p) => (p ? { ...p, note: e.target.value } : p))
+                    setEditing((p) => (p ? { ...p, title: e.target.value } : p))
+                  }
+                  required
+                />
+              </label>
+              <label className="edit-field">
+                <span>Description (optional)</span>
+                <input
+                  type="text"
+                  placeholder="Description"
+                  value={editing.description}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, description: e.target.value } : p))
                   }
                 />
               </label>

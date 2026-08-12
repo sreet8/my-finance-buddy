@@ -385,13 +385,42 @@ button.secondary:hover {
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Entry Type · Category · Amount · Title · Description · Date on one line,
+   proportioned to fill the width of the section. */
 .entry-form {
   display: grid;
-  grid-template-columns: 110px 1fr 140px 1fr auto;
-  gap: 0.5rem;
-  align-items: center;
+  grid-template-columns:
+    minmax(110px, 1fr)
+    minmax(120px, 1.1fr)
+    minmax(90px, 0.8fr)
+    minmax(120px, 1.2fr)
+    minmax(150px, 1.7fr)
+    minmax(140px, 1fr);
+  gap: 0.75rem;
+  align-items: end;
 }
-@media (max-width: 700px) {
+.entry-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.entry-field > span {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.entry-field input,
+.entry-field select { width: 100%; min-width: 0; }
+.entry-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  justify-content: flex-end;
+}
+@media (max-width: 900px) {
+  .entry-form { grid-template-columns: repeat(3, 1fr); }
+  .entry-field-desc { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
   .entry-form { grid-template-columns: 1fr 1fr; }
 }
 
@@ -412,13 +441,51 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .tx-row .amt.expense { color: var(--danger); }
 .tx-row .amt.set_aside { color: var(--success); }
 .tx-row .date { color: var(--muted); }
-.tx-row .tx-category {
+.tx-row .tx-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.tx-row .tx-title {
   font-weight: 700;
   color: var(--text);
+}
+.tx-row .tx-category {
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--panel);
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
 }
 .tx-row .tx-note {
   font-weight: 400;
   color: var(--muted);
+}
+/* Compact (collapsed) rows: date, entry type, amount only. */
+.tx-row-compact {
+  grid-template-columns: 90px 1fr 110px;
+  padding: 0.3rem 0.65rem;
+}
+.tx-row-compact .tx-type { font-weight: 600; color: var(--text); }
+/* Expanded rows: keep everything on one line and let the description ellipsize
+   before it reaches the amount. */
+.tx-label-full {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.tx-label-full .tx-title,
+.tx-label-full .tx-category,
+.tx-label-full .tx-tag { flex-shrink: 0; }
+.tx-note-truncate {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tx-actions { display: inline-flex; align-items: center; gap: 0.1rem; }
 .tx-row .del,
@@ -539,6 +606,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-variant-numeric: tabular-nums;
 }
 
+.category-group { margin-bottom: 1.5rem; }
+.category-group:last-of-type { margin-bottom: 0.5rem; }
+.category-group-heading {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text);
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+.category-group-hint { margin: 0 0 0.75rem; font-size: 0.82rem; }
 .category-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
 .category-row {
   display: grid;

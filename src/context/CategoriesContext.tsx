@@ -16,16 +16,25 @@ import {
   seedDefaultCategories,
   updateCategory,
 } from "../lib/categories";
-import type { CategoryRow } from "../types";
+import type { CategoryRow, CategoryType } from "../types";
 
 type CategoriesContextValue = {
   categories: CategoryRow[];
   names: string[];
+  expenseNames: string[];
+  incomeNames: string[];
+  savingsNames: string[];
+  budgetNames: string[];
+  typeByName: Record<string, CategoryType>;
   colors: Record<string, string>;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  createCategory: (name: string, color: string) => Promise<string | null>;
+  createCategory: (
+    name: string,
+    color: string,
+    type: CategoryType
+  ) => Promise<string | null>;
   saveCategory: (
     id: string,
     oldName: string,
@@ -75,15 +84,33 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const names = useMemo(() => categories.map((c) => c.name), [categories]);
+  const namesOfType = useCallback(
+    (type: CategoryType) =>
+      categories.filter((c) => c.type === type).map((c) => c.name),
+    [categories]
+  );
+  const expenseNames = useMemo(() => namesOfType("expense"), [namesOfType]);
+  const incomeNames = useMemo(() => namesOfType("income"), [namesOfType]);
+  const savingsNames = useMemo(() => namesOfType("savings"), [namesOfType]);
+  // Categories that carry a budget percentage: spending plus savings, never income.
+  const budgetNames = useMemo(
+    () => categories.filter((c) => c.type !== "income").map((c) => c.name),
+    [categories]
+  );
+  const typeByName = useMemo(
+    () => Object.fromEntries(categories.map((c) => [c.name, c.type])) as Record<string, CategoryType>,
+    [categories]
+  );
   const colors = useMemo(() => categoryColorMap(categories), [categories]);
 
   const createCategory = useCallback(
-    async (name: string, color: string) => {
+    async (name: string, color: string, type: CategoryType) => {
+      const sameType = categories.filter((c) => c.type === type);
       const sortOrder =
-        categories.length === 0
+        sameType.length === 0
           ? 0
-          : Math.max(...categories.map((c) => c.sort_order)) + 1;
-      const { data, error: err } = await addCategory(name, color, sortOrder);
+          : Math.max(...sameType.map((c) => c.sort_order)) + 1;
+      const { data, error: err } = await addCategory(name, color, sortOrder, type);
       if (err) return err;
       if (data) setCategories((prev) => [...prev, data]);
       return null;
@@ -134,6 +161,11 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
   const value: CategoriesContextValue = {
     categories,
     names,
+    expenseNames,
+    incomeNames,
+    savingsNames,
+    budgetNames,
+    typeByName,
     colors,
     loading,
     error,

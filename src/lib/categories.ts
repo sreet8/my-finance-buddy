@@ -1,20 +1,24 @@
 import { supabase } from "./supabase";
-import type { CategoryRow } from "../types";
+import type { CategoryRow, CategoryType } from "../types";
 
-/** Categories reserved for savings / investments (excluded from spendable budget). */
-export function isSetAsideCategory(name: string): boolean {
-  const lower = name.trim().toLowerCase();
-  return lower.includes("saving") || lower.includes("investment");
-}
-
-export const DEFAULT_CATEGORIES: Pick<CategoryRow, "name" | "color" | "sort_order">[] = [
-  { name: "Housing", color: "#c4a7cc", sort_order: 0 },
-  { name: "Food", color: "#f5b88f", sort_order: 1 },
-  { name: "Transport", color: "#a8c9a6", sort_order: 2 },
-  { name: "Utilities", color: "#b8a5cc", sort_order: 3 },
-  { name: "Entertainment", color: "#eeb0c0", sort_order: 4 },
-  { name: "Shopping", color: "#a5c2d0", sort_order: 5 },
-  { name: "Other", color: "#c9a98b", sort_order: 6 },
+export const DEFAULT_CATEGORIES: Pick<
+  CategoryRow,
+  "name" | "color" | "sort_order" | "type"
+>[] = [
+  { name: "Housing", color: "#c4a7cc", sort_order: 0, type: "expense" },
+  { name: "Food", color: "#f5b88f", sort_order: 1, type: "expense" },
+  { name: "Transport", color: "#a8c9a6", sort_order: 2, type: "expense" },
+  { name: "Utilities", color: "#b8a5cc", sort_order: 3, type: "expense" },
+  { name: "Entertainment", color: "#eeb0c0", sort_order: 4, type: "expense" },
+  { name: "Shopping", color: "#a5c2d0", sort_order: 5, type: "expense" },
+  { name: "Other", color: "#c9a98b", sort_order: 6, type: "expense" },
+  { name: "Direct Deposit", color: "#9ec5a8", sort_order: 0, type: "income" },
+  { name: "Zelle", color: "#8bb7e0", sort_order: 1, type: "income" },
+  { name: "Venmo Transfer", color: "#7fa8d8", sort_order: 2, type: "income" },
+  { name: "Other Income", color: "#c9b8a0", sort_order: 3, type: "income" },
+  { name: "Schwab Individual", color: "#a8c6d8", sort_order: 0, type: "savings" },
+  { name: "Schwab Roth", color: "#c4b0d8", sort_order: 1, type: "savings" },
+  { name: "Apple Savings", color: "#b8bcc4", sort_order: 2, type: "savings" },
 ];
 
 export async function fetchCategories(): Promise<{
@@ -23,7 +27,7 @@ export async function fetchCategories(): Promise<{
 }> {
   const { data, error } = await supabase
     .from("categories")
-    .select("id, name, color, sort_order")
+    .select("id, name, color, sort_order, type")
     .order("sort_order", { ascending: true });
   if (error) return { data: null, error: error.message };
   return { data: (data ?? []) as CategoryRow[], error: null };
@@ -37,14 +41,15 @@ export async function seedDefaultCategories(): Promise<string | null> {
 export async function addCategory(
   name: string,
   color: string,
-  sortOrder: number
+  sortOrder: number,
+  type: CategoryType
 ): Promise<{ data: CategoryRow | null; error: string | null }> {
   const trimmed = name.trim();
   if (!trimmed) return { data: null, error: "Category name is required" };
   const { data, error } = await supabase
     .from("categories")
-    .insert({ name: trimmed, color, sort_order: sortOrder })
-    .select("id, name, color, sort_order")
+    .insert({ name: trimmed, color, sort_order: sortOrder, type })
+    .select("id, name, color, sort_order, type")
     .single();
   if (error) return { data: null, error: error.message };
   return { data: data as CategoryRow, error: null };
